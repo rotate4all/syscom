@@ -1,0 +1,8 @@
+bin/
+obj/
+dist/
+.vs/
+*.user
+.vscode/
+.idea/
+frame-trace/

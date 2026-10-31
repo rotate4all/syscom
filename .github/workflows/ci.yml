@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build server, updater and tray app (win-x64)
+        shell: pwsh
+        run: |
+          foreach ($p in 'Syscom.Server', 'Syscom.Updater', 'Syscom.Tray') {
+            dotnet build "src/$p" -c Release -r win-x64 -warnaserror
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*   # always the current LTS
+
+      - name: Check web client syntax
+        shell: pwsh
+        run: Get-ChildItem web/js/*.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit 1 } }
+
+  smoke:
+    # Starts the server with mock sensors on Linux and checks the public endpoints.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - name: Run server and probe it
+        run: |
+          dotnet build src/Syscom.Server -c Release
+          dotnet src/Syscom.Server/bin/Release/net10.0/syscom.dll --mock --config "$RUNNER_TEMP/cfg/config.json" &
+          for i in $(seq 1 30); do curl -sf localhost:47810/api/health && break; sleep 1; done
+          curl -sf localhost:47810/api/info
+          curl -sf localhost:47810/ | grep -q "<title>SYSCOM</title>"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/sensors)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/dashboard)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' 'localhost:47810/api/history?sensor=x')" = "401"
+          # Signed in: save and read back a dashboard, read a sensor's history
+          PW=$(cat "$HOME/.config/SYSCOM/initial-password.txt")
+          TOKEN=$(curl -sf localhost:47810/api/login -H 'content-type: application/json' -d "{\"password\":\"$PW\"}" | jq -r .token)
+          curl -sf -X PUT localhost:47810/api/dashboard -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            -d '{"widgets":[{"id":"s1","kind":"section","title":"CPU"},{"id":"w1","sensor":"/mock/cpu/load/0","type":"gauge","w":2,"h":3}]}' | jq -e '.rev == 1'
+          curl -sf localhost:47810/api/dashboard -H "authorization: Bearer $TOKEN" | jq -e '.widgets | length == 2'
+          sleep 3
+          curl -sf 'localhost:47810/api/history?sensor=/mock/cpu/load/0&days=1' -H "authorization: Bearer $TOKEN" | jq -e '.step == 60 and (.avg | length) == 1440 and (.avg[-1] != null or .avg[-2] != null)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/admin/components)" = "403"
+          curl -sf localhost:47810/trust | grep -q "Install SYSCOM as an app"
+          # HTTPS with the server's own CA (name-constrained to local names and private addresses)
+          curl -sf localhost:47810/tls/syscom-ca.crt -o "$RUNNER_TEMP/ca.der"
+          openssl x509 -inform der -in "$RUNNER_TEMP/ca.der" -out "$RUNNER_TEMP/ca.pem"
+          curl -sf --cacert "$RUNNER_TEMP/ca.pem" https://localhost:47812/api/health
+          curl -sf localhost:47810/tls/syscom.mobileconfig | grep -q "com.apple.security.root"
