@@ -14,6 +14,8 @@ export class Connection extends EventTarget {
     this.ws = null;
     this.retry = 0;
     this.timer = 0;
+    this.watchAll = false;     // true while the widget editor is open: stream every sensor for its live list
+    this.last = null;          // the latest data frame
   }
 
   /** A dashboard opened over HTTPS must reach every PC over HTTPS too (browsers block mixed content). */
@@ -120,13 +122,24 @@ export class Connection extends EventTarget {
     if (this.status !== 'auth') this.setStatus('idle');
   }
 
-  /** Ask only for the sensors this device's dashboard shows, at its polling interval. */
+  /** Ask only for the sensors this device's dashboard shows, at its polling interval (all of them while editing). */
   subscribe() {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    // Each widget's sensor, plus the sensors that give it a live scale maximum (e.g. total VRAM).
+    if (this.watchAll) {   // no list = every sensor
+      this.ws.send(JSON.stringify({ type: 'subscribe', interval: this.device.interval }));
+      return;
+    }
+    // Each widget's sensor, its extra readings, and the sensors that give it a live scale maximum (e.g. total VRAM).
     const sensors = [...new Set(this.device.widgets.filter((w) => w.sensor).flatMap((w) =>
-      [w.sensor, ...(effectiveMaxFrom(w, this.sensors.get(w.sensor), this.catalog) || [])]))];
+      [w.sensor, ...(w.extra || []).map((x) => x.sensor), ...(effectiveMaxFrom(w, this.sensors.get(w.sensor), this.catalog) || [])]))];
     this.ws.send(JSON.stringify({ type: 'subscribe', interval: this.device.interval, sensors }));
+  }
+
+  /** Streams every sensor (on) or just the dashboard's again (off). */
+  setWatchAll(on) {
+    if (this.watchAll === on) return;
+    this.watchAll = on;
+    this.subscribe();
   }
 
   onMessage(raw) {
@@ -142,7 +155,8 @@ export class Connection extends EventTarget {
         this.index = new Map(m.sensors.map((id, i) => [id, i]));
         break;
       case 'data':
-        this.emit('data', { t: m.t, v: m.v });
+        this.last = { t: m.t, v: m.v };
+        this.emit('data', this.last);
         break;
       case 'layout':
         this.emit('layout', { rev: m.rev });

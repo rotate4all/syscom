@@ -53,7 +53,7 @@
           <div class="tabs" id="w-dev" role="tablist" aria-label="Device"></div>
           <div class="subpanel">
             <div class="pills" id="w-read" role="group" aria-label="Reading"></div>
-            <select id="w-sensor" size="6" required aria-label="Sensor"></select>
+            <div id="w-sensor" class="sensor-list" role="listbox" tabindex="0" aria-label="Sensor"></div>
           </div>
         </div>
       </div>
@@ -91,7 +91,17 @@
         <p class="hint" id="w-thick-hint">Grows and shrinks with the card. 100% is the default; this makes it thinner or thicker than that.</p>
       </div>
 
-      <label class="field">Label <input id="w-label" maxlength="40"></label>
+      <div class="row">
+        <label class="field">Title <input id="w-label" maxlength="40"></label>
+        <label class="field">Subtitle <input id="w-sub" maxlength="60"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="w-sub-show" checked> Show the subtitle <span class="hint">(left empty, it names the device)</span></label>
+
+      <div class="field extras" id="w-extra-field">
+        <span>Also show on this card <small>up to 2 more readings under the main one, each as a value, a small graph or both</small></span>
+        <ul class="extra-list" id="w-extra-list" hidden></ul>
+        <select id="w-extra-add" aria-label="Add a reading to this card"></select>
+      </div>
 
       <div class="row">
         <label class="field">Scale min <input id="w-min" type="number" step="any" placeholder="0"></label>

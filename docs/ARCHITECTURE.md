@@ -31,6 +31,7 @@ Windows service, or as a console app for development.
 | `DashboardStore` | `Dashboards/DashboardStore.cs` | This PC's dashboard layout (`dashboard.json`), shared by every browser that signs in. Each save bumps a revision; open WebSockets are told (`layout` message) and reload it. |
 | `LhmSensorSource` | `Sensors/LhmSensorSource.cs` | Wraps LibreHardwareMonitorLib: CPU, GPU, memory, motherboard, storage, network, battery, PSU. Sensor IDs are LHM's stable identifiers (e.g. `/amdcpu/0/temperature/2`). |
 | `DriveSpaceSource` | `Sensors/DriveSpaceSource.cs` | Free/used/total space per fixed drive via `DriveInfo` (no dependency). |
+| `DerivedSensors` | `Sensors/DerivedSensors.cs` | Readings worked out from others: percent used for every "X Used" / "X Total" pair on one device (id = the used reading's id + `/percent`). Gives VRAM % on every GPU vendor; LibreHardwareMonitor's own "GPU Memory" load means VRAM on NVIDIA but memory controller activity on AMD. |
 | `PresentMonitorSource` | `Sensors/PresentMonitorSource.cs` | Frame rate and frame time for any GPU from Windows' present events (real-time ETW session on the DXGI and D3D9 providers, called directly, no dependency). Picks the app drawing the most frames, ignoring the compositor and shell. Runs while the hub polls (always while history is on). |
 | `MockSensorSource` | `Sensors/MockSensorSource.cs` | Synthetic data for client development (`--mock`, default on non-Windows builds). |
 | `MetricsSession` | `Streaming/MetricsSession.cs` | One WebSocket client. Sends the sensor catalog, then compact value arrays for just the sensors the client's dashboard shows. |
@@ -85,7 +86,10 @@ Cards sit on a grid of fixed-height rows (56 px) and columns about 90 px wide: 4
 to 16). A card's size is a number of columns and rows, so a layout keeps its shape from phone to desktop; a card never
 spans more columns than the screen has. Everything inside a card is sized in container query units, so it scales
 with the card. Bar, arc and line thickness work the same way; a card's optional `thick` (25 to 300, a percentage)
-multiplies that proportional thickness, so a thicker card still scales when it is resized. Sections are separate grids, so cards never flow from one section into another.
+multiplies that proportional thickness, so a thicker card still scales when it is resized. A card can carry up to
+two more readings (`extra: [{ sensor, show }]`, `show` = `value`, `both` or `graph`) drawn under its main display,
+and its own title (`label`) and subtitle (`sub`, `hideSub`). While the widget editor is open, the browser subscribes
+to every sensor (a subscribe message without a list) so the sensor list can show live readings. Sections are separate grids, so cards never flow from one section into another.
 
 ### Where the dashboard lives
 

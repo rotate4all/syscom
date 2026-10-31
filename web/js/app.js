@@ -3,6 +3,7 @@ import { Connection } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
+  MAX_EXTRA, EXTRA_SHOW, extrasOf, readingText,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
@@ -62,8 +63,9 @@ function onData(dev, frame) {
       const x = conn.value(frame, id);
       return sum == null || x == null ? null : sum + x;
     }, 0) : null;
-    inst.update(conn.value(frame, w.sensor), visible, max);
+    inst.update(conn.value(frame, w.sensor), visible, max, w.extra?.map((x) => conn.value(frame, x.sensor)));
   }
+  if (dlgWidget.open && editTarget?.dev === dev) { takeFrame(conn, frame); paintLive(); }
 }
 
 async function addDevice(url, { quiet = false } = {}) {
@@ -129,21 +131,20 @@ async function syncLayout(dev, rev) {
   if (dev.layoutDirty) { pushLayout(dev); return; }     // changes made here (perhaps offline) win
   if (dev._pushing || rev === dev.layoutRev) return;
   const conn = conns.get(dev.key);
-  try {
-    const saved = await conn.loadDashboard();
-    if (!saved.rev || !Array.isArray(saved.widgets)) {
-      // Nothing on the PC yet: this browser's layout becomes the PC's.
-      if (dev.widgets.length) { dev.layoutDirty = true; pushLayout(dev); }
-      return;
-    }
-    if (dev.layoutDirty || saved.rev === dev.layoutRev) return;
-    dev.widgets = normalizeItems(saved.widgets);
-    dev.layoutRev = saved.rev;
-    persist();
-    const p = pages.get(dev.key);
-    if (p?.dragging) p.pending = true; else renderPage(dev);
-    conn.subscribe();
-  } catch { /* offline or signed out; the next announcement retries */ }
+  let saved;
+  try { saved = await conn.loadDashboard(); } catch { return; }   // offline or signed out; the next announcement retries
+  if (!saved.rev || !Array.isArray(saved.widgets)) {
+    // Nothing on the PC yet: this browser's layout becomes the PC's.
+    if (dev.widgets.length) { dev.layoutDirty = true; pushLayout(dev); }
+    return;
+  }
+  if (dev.layoutDirty || saved.rev === dev.layoutRev) return;
+  dev.widgets = normalizeItems(saved.widgets);
+  dev.layoutRev = saved.rev;
+  persist();
+  const p = pages.get(dev.key);
+  if (p?.dragging) p.pending = true; else renderPage(dev);
+  conn.subscribe();
 }
 
 // ---------- rendering
@@ -250,7 +251,7 @@ function renderPage(dev) {
     grid.className = 'grid';
     for (const w of g.items) {
       const sensor = conn.sensors.get(w.sensor);
-      const inst = createWidget(w, sensor, widgetTools(dev, w));
+      const inst = createWidget(w, sensor, widgetTools(dev, w), (id) => conn.sensors.get(id));
       inst.maxFrom = effectiveMaxFrom(w, sensor, conn.catalog);
       inst.signature = widgetSignature(w, conn);
       inst.el.addEventListener('click', (e) => {
@@ -371,7 +372,7 @@ function refreshPage(dev) {
     const inst = p.widgets.get(w.id);
     if (!inst || inst.signature !== widgetSignature(w, conn)) return false;
   }
-  for (const w of widgets) p.widgets.get(w.id).setSensor(conn.sensors.get(w.sensor));
+  for (const w of widgets) p.widgets.get(w.id).setSensor(conn.sensors.get(w.sensor), (id) => conn.sensors.get(id));
   renderMessage(dev);
   return true;
 }
@@ -556,7 +557,10 @@ const READING_CATS = [
 // Friendlier names for LibreHardwareMonitor's sensor types in the list.
 const TYPE_LABEL = { Data: 'Size', SmallData: 'Size', Throughput: 'Data rate', Fps: 'Frame rate', Frametime: 'Frame time', Control: 'Fan control' };
 const deviceCat = (s) => DEVICE_CATS.find(([, , test]) => test(s))?.[0] || 'other';
-const readingCat = (s) => READING_CATS.find(([, , types]) => types.includes(s.type))?.[0] || 'other';
+// How full memory or a drive is (a percentage of "used") sits with the sizes, not with processor load.
+const isFullness = (s) => s.unit === '%' && /\bused\b|\bspace\b/i.test(s.name);
+const readingCat = (s) => (isFullness(s) ? 'data' : READING_CATS.find(([, , types]) => types.includes(s.type))?.[0] || 'other');
+const typeLabel = (s) => (isFullness(s) ? 'Usage' : TYPE_LABEL[s.type] || s.type);
 const pick = { dev: 'all', read: 'all' };
 let unitShown = null;   // the size unit the form's numbers are in
 
@@ -564,17 +568,93 @@ function openWidgetEditor(dev, widget, sectionId = null) {
   const conn = conns.get(dev.key);
   if (!conn?.catalog.length) { alert('Connect to this device first to see its sensors.'); return; }
   editTarget = { dev, widget, sectionId };
+  extrasShown = [];
+  extrasTouched = false;
   $('#widget-title').textContent = widget ? 'Edit widget' : 'Add widget';
   $('#w-search').value = '';
   const current = widget && conn.sensors.get(widget.sensor);
   if (current) { pick.dev = deviceCat(current); pick.read = readingCat(current); }
   else { pick.dev = DEVICE_CATS.find(([, , test]) => conn.catalog.some(test))?.[0] || 'other'; pick.read = 'all'; }
+  // Every sensor's live reading while the editor is open: start from the dashboard's latest, then stream them all.
+  liveValues.clear();
+  takeFrame(conn, conn.last);
+  conn.setWatchAll(true);
   fillSensorList(conn.catalog, widget?.sensor);
   const sensor = conn.sensors.get($('#w-sensor').value);
   fillWidgetForm(widget || defaultsFor(sensor || conn.catalog[0], conn.catalog), sensor, conn.catalog);
   dlgWidget.showModal();
   showActiveTab();
+  revealSensor();
 }
+
+// ---------- live readings in the editor
+const liveValues = new Map();   // sensor id → latest value, while the editor is open
+function takeFrame(conn, frame) {
+  if (!frame) return;
+  for (const [id, i] of conn.index) liveValues.set(id, frame.v[i]);
+}
+function paintLive() {
+  const conn = conns.get(editTarget?.dev.key);
+  if (!conn) return;
+  const put = (el, id) => {
+    const text = readingText(conn.sensors.get(id), liveValues.get(id));
+    if (el.textContent !== text) el.textContent = text;
+  };
+  for (const row of sensorList.querySelectorAll('.opt')) put(row.lastElementChild, row.dataset.id);
+  for (const li of $('#w-extra-list').children) put(li.querySelector('.v'), li.dataset.id);
+}
+
+// ---------- sensor list: a listbox, so every row can show the sensor's live reading
+const sensorList = $('#w-sensor');
+let sensorPicked = '';
+Object.defineProperty(sensorList, 'value', { get: () => sensorPicked, set: (id) => markSensor(id) });
+
+function markSensor(id) {
+  sensorPicked = '';
+  sensorList.removeAttribute('aria-activedescendant');
+  for (const row of sensorList.querySelectorAll('.opt')) {
+    const on = row.dataset.id === id;
+    row.setAttribute('aria-selected', String(on));
+    if (on) { sensorPicked = id; sensorList.setAttribute('aria-activedescendant', row.id); }
+  }
+}
+
+/** Scrolls the list so the chosen sensor is visible below its device's sticky name. */
+function revealSensor() {
+  const row = sensorList.querySelector('.opt[aria-selected="true"]');
+  if (!row) return;
+  const head = row.parentElement.querySelector('.grp-name')?.offsetHeight || 0;
+  const top = row.offsetTop - head;
+  const bottom = row.offsetTop + row.offsetHeight;
+  if (top < sensorList.scrollTop) sensorList.scrollTop = top;
+  else if (bottom > sensorList.scrollTop + sensorList.clientHeight) sensorList.scrollTop = bottom - sensorList.clientHeight;
+}
+
+function chooseSensor(row) {
+  if (!row) return;
+  if (row.dataset.id !== sensorPicked) {
+    markSensor(row.dataset.id);
+    sensorList.dispatchEvent(new Event('change'));
+  }
+  revealSensor();
+}
+sensorList.addEventListener('click', (e) => chooseSensor(e.target.closest('.opt')));
+sensorList.addEventListener('keydown', (e) => {
+  const rows = [...sensorList.querySelectorAll('.opt')];
+  if (!rows.length) return;
+  const i = rows.findIndex((r) => r.dataset.id === sensorPicked);
+  const page = Math.max(1, Math.floor(sensorList.clientHeight / (rows[0].offsetHeight || 28)) - 1);
+  const to = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: rows.length - 1, PageDown: i + page, PageUp: i - page }[e.key];
+  if (to === undefined) return;
+  e.preventDefault();
+  chooseSensor(rows[Math.max(0, Math.min(rows.length - 1, to))]);
+});
+// From the search box, the arrow keys and Enter go to the list (Enter would otherwise close the dialog).
+$('#w-search').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'Enter') return;
+  e.preventDefault();
+  sensorList.focus();
+});
 
 /** Device tabs (no "All": search covers that) or reading pills (with "All"). Empty categories are left out. */
 function renderChoices(host, cats, current, counts, onPick, { tabs = false } = {}) {
@@ -648,24 +728,38 @@ function fillSensorList(catalog, selectedId) {
     : inDev.filter((s) => pick.read === 'all' || readingCat(s) === pick.read);
 
   sel.replaceChildren();
+  sel.scrollTop = 0;
   const groups = new Map();
   for (const s of list) {
     if (!groups.has(s.hardware)) groups.set(s.hardware, []);
     groups.get(s.hardware).push(s);
   }
+  let n = 0;
   for (const [hw, items] of groups) {
-    const og = document.createElement('optgroup');
-    og.label = hw;
+    const g = document.createElement('div');
+    g.className = 'grp';
+    g.setAttribute('role', 'group');
+    g.setAttribute('aria-label', hw);
+    const name = document.createElement('div');
+    name.className = 'grp-name';
+    name.setAttribute('aria-hidden', 'true');
+    name.textContent = hw;
+    g.append(name);
     for (const s of items) {
-      const o = document.createElement('option');
-      o.value = s.id;
-      o.textContent = `${s.name} · ${TYPE_LABEL[s.type] || s.type}${s.unit ? ` (${s.unit})` : ''}`;
-      if (s.id === selectedId) o.selected = true;
-      og.append(o);
+      const o = document.createElement('div');
+      o.className = 'opt';
+      o.id = `w-opt-${n++}`;
+      o.dataset.id = s.id;
+      o.setAttribute('role', 'option');
+      o.innerHTML = `<span class="n">${escapeHtml(s.name)}<small>${escapeHtml(typeLabel(s))}</small></span>`
+        + `<span class="v">${escapeHtml(readingText(s, liveValues.get(s.id)))}</span>`;
+      g.append(o);
     }
-    sel.append(og);
+    sel.append(g);
   }
-  if (!sel.value && sel.options.length) sel.options[0].selected = true;
+  if (!list.length) sel.innerHTML = '<p class="empty">No sensor matches that.</p>';
+  markSensor(list.some((s) => s.id === selectedId) ? selectedId : list[0]?.id || '');
+  revealSensor();
 }
 
 function fillWidgetForm(w, sensor, catalog) {
@@ -677,7 +771,14 @@ function fillWidgetForm(w, sensor, catalog) {
   fillStyleOptions(w.type, w.style, w.pos);
   $('#w-thick').value = String(Math.round(thicknessOf(w) * 100));
   syncThickness();
+  extrasShown = extrasOf(w);
+  renderExtras();
   $('#w-label').value = w.label || '';
+  $('#w-label').placeholder = sensor?.name || '';
+  $('#w-sub').value = w.sub || '';
+  $('#w-sub').placeholder = sensor?.hardware || '';
+  $('#w-sub-show').checked = !w.hideSub;
+  syncSub();
   $('#w-min').value = w.min ?? '';
   $('#w-max').value = w.max ?? '';
   $('#w-dec').value = String(w.decimals ?? 0);
@@ -739,9 +840,67 @@ function syncThickness() {
 }
 $('#w-thick').addEventListener('input', syncThickness);
 $('#w-thick-reset').addEventListener('click', () => { $('#w-thick').value = '100'; syncThickness(); });
+
+// ---------- more readings on the same card (up to MAX_EXTRA besides the main one)
+let extrasShown = [];   // [{ sensor, show }] in the form
+let extrasTouched = false;   // added, removed or changed by hand (kept when another main sensor is picked)
+function renderExtras() {
+  const conn = conns.get(editTarget?.dev.key);
+  const list = $('#w-extra-list');
+  list.replaceChildren();
+  extrasShown = extrasShown.filter((x) => x.sensor !== sensorList.value);
+  for (const x of extrasShown) {
+    const s = conn?.sensors.get(x.sensor);
+    const li = document.createElement('li');
+    li.dataset.id = x.sensor;
+    li.innerHTML = `<span class="n">${escapeHtml(s ? s.name : 'Sensor not available')}<small>${escapeHtml(s ? `${typeLabel(s)} · ${s.hardware}` : '')}</small></span>`
+      + `<span class="v">${escapeHtml(readingText(s, liveValues.get(x.sensor)))}</span>`
+      + `<select aria-label="Show as">${EXTRA_SHOW.map(([k, l]) => `<option value="${k}"${k === x.show ? ' selected' : ''}>${l}</option>`).join('')}</select>`
+      + `<button type="button" title="Remove from this card" aria-label="Remove">×</button>`;
+    li.querySelector('select').onchange = (e) => { x.show = e.target.value; extrasTouched = true; };
+    li.querySelector('button').onclick = () => { extrasShown = extrasShown.filter((y) => y !== x); extrasTouched = true; renderExtras(); };
+    list.append(li);
+  }
+  list.hidden = !extrasShown.length;
+
+  // The add menu: this device's sensors first, then the others by device.
+  const add = $('#w-extra-add');
+  const full = extrasShown.length >= MAX_EXTRA;
+  add.replaceChildren(new Option(full ? `That's ${MAX_EXTRA + 1} sensors, the most a card shows` : '+ Add a reading…', ''));
+  add.disabled = full || !conn;
+  if (add.disabled) return;
+  const main = conn.sensors.get(sensorList.value);
+  const taken = new Set([sensorList.value, ...extrasShown.map((x) => x.sensor)]);
+  const groups = new Map();
+  if (main) groups.set(main.hardware, []);
+  for (const s of conn.catalog) {
+    if (taken.has(s.id)) continue;
+    if (!groups.has(s.hardware)) groups.set(s.hardware, []);
+    groups.get(s.hardware).push(s);
+  }
+  for (const [hw, items] of groups) {
+    if (!items.length) continue;
+    const og = document.createElement('optgroup');
+    og.label = main && hw === main.hardware ? `${hw} (this card's device)` : hw;
+    for (const s of items) og.append(new Option(`${s.name} · ${typeLabel(s)} · ${readingText(s, liveValues.get(s.id))}`, s.id));
+    add.append(og);
+  }
+}
+$('#w-extra-add').addEventListener('change', (e) => {
+  const id = e.target.value;
+  if (!id) return;
+  const s = conns.get(editTarget?.dev.key)?.sensors.get(id);
+  // Power, clocks and the like read well as a number with a small graph; a fan's RPM next to its % as a number.
+  extrasShown.push({ sensor: id, show: s && ['Power', 'Throughput', 'Load'].includes(s.type) ? 'both' : 'value' });
+  extrasTouched = true;
+  renderExtras();
+});
 $('#w-style').addEventListener('change', () => {
   if ($('#w-type').value === 'gauge') $('#w-pos').value = defaultPosition('gauge', $('#w-style').value);
 });
+
+function syncSub() { $('#w-sub').disabled = !$('#w-sub-show').checked; }
+$('#w-sub-show').addEventListener('change', syncSub);
 
 function syncTotal() {
   const on = !$('#w-total-field').hidden && $('#w-total').checked;
@@ -756,8 +915,12 @@ function onSensorPicked() {
   const s = conn?.sensors.get($('#w-sensor').value);
   if (!s) return;
   // Adding: a different sensor brings its own defaults. Editing: keep the settings, refresh the sensor-specific bits.
-  if (!editTarget.widget) fillWidgetForm(defaultsFor(s, conn.catalog), s, conn.catalog);
-  else fillWidgetForm(readForm(editTarget.widget.id), s, conn.catalog);
+  // Readings already added to the card stay.
+  if (!editTarget.widget) {
+    const d = defaultsFor(s, conn.catalog);
+    if (extrasTouched) d.extra = extrasShown;
+    fillWidgetForm(d, s, conn.catalog);
+  } else fillWidgetForm(readForm(editTarget.widget.id), s, conn.catalog);
 }
 
 $('#w-search').addEventListener('input', () => {
@@ -798,7 +961,10 @@ function readForm(id) {
     style: $('#w-type').value === 'gauge' ? $('#w-style').value : undefined,
     pos: positionsFor($('#w-type').value) ? $('#w-pos').value : undefined,
     thick: $('#w-type').value !== 'value' && Number($('#w-thick').value) !== 100 ? Number($('#w-thick').value) : undefined,
+    extra: extrasShown.length ? extrasShown.filter((x) => x.sensor !== $('#w-sensor').value).slice(0, MAX_EXTRA) : undefined,
     label: $('#w-label').value.trim(),
+    sub: $('#w-sub').value.trim() || undefined,
+    hideSub: !$('#w-sub-show').checked || undefined,
     min: num('#w-min') ?? 0,
     max: useTotal ? null : num('#w-max'),
     maxFrom: useTotal ? total : [],
@@ -817,6 +983,7 @@ function insertIndex(items, sectionId) {
 }
 
 dlgWidget.addEventListener('close', () => {
+  if (editTarget) conns.get(editTarget.dev.key)?.setWatchAll(false);
   if (dlgWidget.returnValue !== 'save' || !editTarget) return;
   const { dev, widget, sectionId } = editTarget;
   const next = readForm(widget?.id || uid());

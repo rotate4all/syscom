@@ -92,8 +92,41 @@ export function defaultsFor(sensor, catalog = []) {
     w.type = 'graph';
     setT(w, 0, 20, 33);   // above 20 ms is under 50 FPS, above 33 ms under 30 FPS
   }
+  // A fan's speed in % and in RPM belong together: LibreHardwareMonitor names both after the fan.
+  const partner = { Control: 'Fan', Fan: 'Control' }[t];
+  const twin = partner && catalog.find((s) => s.type === partner && s.hardware === sensor.hardware && s.name === sensor.name);
+  if (twin) w.extra = [{ sensor: twin.id, show: 'value' }];
   [w.w, w.h] = defaultSize(w.type);
   return w;
+}
+
+/** How many more readings a card can show under its main one (3 sensors per card in all). */
+export const MAX_EXTRA = 2;
+
+/** How an extra reading is shown: [value, label]. */
+export const EXTRA_SHOW = [['value', 'Value'], ['both', 'Value and graph'], ['graph', 'Graph only']];
+
+/** A widget's extra readings as [{ sensor, show }] (older layouts stored bare sensor ids). */
+export function extrasOf(w) {
+  if (!Array.isArray(w?.extra)) return [];
+  const seen = new Set([w.sensor]);
+  const out = [];
+  for (const x of w.extra) {
+    const e = typeof x === 'string' ? { sensor: x } : x;
+    if (!e || typeof e.sensor !== 'string' || seen.has(e.sensor)) continue;
+    seen.add(e.sensor);
+    out.push({ sensor: e.sensor, show: EXTRA_SHOW.some(([k]) => k === e.show) ? e.show : 'value' });
+  }
+  return out.slice(0, MAX_EXTRA);
+}
+
+/** A reading as short text with its unit ("1450 RPM", "62 °C", "1.250 V"), for lists and extra readings. */
+export function readingText(sensor, v) {
+  const unit = sensor?.unit || '';
+  if (v == null || isNaN(v)) return '–';
+  const whole = ['%', '°C', 'RPM', 'MHz', 'Hz', 'FPS', 'MB', 'dBA', 'mWh', 'L/h'].includes(unit);
+  const f = format(v, unit, unit === 'V' ? 3 : whole || Math.abs(v) >= 100 ? 0 : 1);
+  return `${f.n}${f.u ? ' ' + f.u : ''}`;
 }
 
 /** A widget or section from storage, brought up to date (old "size" → columns × rows). */
@@ -106,6 +139,9 @@ export function normalizeItem(x) {
   w.w = Math.min(MAX_W, Math.round(w.w));
   w.h = Math.min(MAX_H, Math.round(w.h));
   delete w.size;
+  const extra = extrasOf(w);
+  if (extra.length) w.extra = extra;
+  else delete w.extra;
   return w;
 }
 
@@ -239,6 +275,7 @@ export function positionsFor(type) {
   if (type === 'gauge') return [['top', 'Top'], ['center', 'Center'], ['bottom', 'Bottom']];
   if (type === 'bar') return [['top', 'Above, left'], ['top-right', 'Above, right'], ['bottom', 'Below, left'], ['bottom-right', 'Below, right'], ['left', 'Left of the bar'], ['right', 'Right of the bar'], ['inside', 'Inside the bar']];
   if (type === 'vbar') return [['top', 'Above'], ['bottom', 'Below'], ['left', 'Left of the bar'], ['right', 'Right of the bar'], ['inside', 'Inside the bar']];
+  if (type === 'graph') return [['top', 'Above the graph'], ['none', 'Hidden (graph only)']];
   return null;
 }
 
@@ -257,12 +294,13 @@ function arcD(c, r, a0, a1) {
 }
 
 /**
- * Creates a widget card. Returns { el, update(value, visible, max), setSensor(sensor), refresh(), destroy() }.
+ * Creates a widget card. Returns { el, update(value, visible, max, extras), setSensor(sensor, lookup), refresh(), destroy() }.
  * `sensor` may be undefined while the catalog is still loading or the hardware is gone. `max` is the live scale
- * maximum (e.g. total VRAM) in the sensor's own unit, when the widget has one. The card's size (grid span) is set by
- * the dashboard; everything inside scales with the card.
+ * maximum (e.g. total VRAM) in the sensor's own unit, when the widget has one. `extras` are the values of the
+ * widget's extra readings (w.extra), shown as a line under the main display; `lookup(id)` gives their sensor info.
+ * The card's size (grid span) is set by the dashboard; everything inside scales with the card.
  */
-export function createWidget(w, sensor, tools) {
+export function createWidget(w, sensor, tools, lookup = () => undefined) {
   const card = el('div', 'card');
   card.dataset.id = w.id;
   card.dataset.type = w.type;
@@ -270,7 +308,9 @@ export function createWidget(w, sensor, tools) {
   const label = el('span', 'label');
   label.textContent = w.label || sensor?.name || 'Sensor';
   const hw = el('span', 'hw');
-  hw.textContent = sensor ? sensor.hardware : 'unavailable';
+  hw.textContent = w.sub || (sensor ? sensor.hardware : 'unavailable');
+  hw.hidden = !!w.hideSub;
+  card.classList.toggle('no-sub', !!w.hideSub);
   head.append(label, hw);
   const icon = el('span', 'card-icon', deviceIcon(sensor));
   const bodyWrap = el('div', 'card-body');
@@ -298,31 +338,117 @@ export function createWidget(w, sensor, tools) {
   else impl = value();
 
   bodyWrap.append(impl.body);
+
+  // Extra readings under the main display, e.g. a fan's RPM under its % gauge or CPU power under CPU load.
+  const extras = extrasOf(w).map((x) => ({ ...x, s: lookup(x.sensor), v: null, hist: [], peak: 0 }));
+  let extraRo = null;
+  if (extras.length) card.append(extraRows());
   if (tools) card.append(tools);
 
   let last = null;
   return {
     el: card,
-    update(v, visible, max) {
+    update(v, visible, max, xs) {
       if (v != null) v *= k;
       if (max != null) liveMax = max * k;
       last = v;
       if (v != null && v > peak) peak = v;
+      if (xs) extras.forEach((x, i) => {
+        x.v = xs[i] ?? null;
+        if (x.v != null && x.v > x.peak) x.peak = x.v;
+        if (x.show !== 'value') { x.hist.push(x.v); if (x.hist.length > HISTORY) x.hist.shift(); }
+      });
       impl.push?.(v);
       if (visible) paint();
     },
     refresh() { paint(); },
-    setSensor(s) {
+    setSensor(s, find = lookup) {
       if (!w.label) label.textContent = s?.name || 'Sensor';
-      hw.textContent = s ? s.hardware : 'unavailable';
+      hw.textContent = w.sub || (s ? s.hardware : 'unavailable');
+      extras.forEach((x) => { x.s = find(x.sensor); });
     },
-    destroy() { impl.destroy?.(); },
+    destroy() { impl.destroy?.(); extraRo?.disconnect(); },
   };
 
   function paint() {
     const c = colorFor(w, last);
     card.style.setProperty('--c', c || 'var(--accent)');
     impl.paint(last, c);
+    for (const x of extras) paintExtra(x);
+  }
+
+  // ---- extra readings: consecutive value-only ones share a line; the others get a row with a small graph
+  function extraRows() {
+    const wrap = el('div', 'card-extra');
+    let line = null;
+    for (const x of extras) {
+      if (x.show === 'value') {
+        if (!line) wrap.append(line = el('div', 'x-line'));
+        x.text = el('span', 'x-v');
+        line.append(x.text);
+        x.tipEl = x.text;
+        continue;
+      }
+      line = null;
+      const row = el('div', `x-row x-${x.show}`);
+      if (x.show === 'both') row.append(x.text = el('span', 'x-v'));
+      x.canvas = el('canvas');
+      row.append(x.canvas);
+      x.tipEl = row;
+      wrap.append(row);
+    }
+    if (extras.some((x) => x.canvas)) {
+      extraRo = new ResizeObserver(() => extras.forEach((x) => { x.sized = false; drawSpark(x); }));
+      extras.forEach((x) => x.canvas && extraRo.observe(x.canvas));
+    }
+    return wrap;
+  }
+
+  function paintExtra(x) {
+    const text = x.s ? readingText(x.s, x.v) : '–';
+    if (x.text && x.text.textContent !== text) x.text.textContent = text;
+    const tip = x.s ? `${x.s.name} (${x.s.hardware}): ${text}` : 'Sensor not available';
+    if (x.tipEl.title !== tip) x.tipEl.title = tip;
+    drawSpark(x);
+  }
+
+  /** A small rolling line chart for an extra reading: from 0 (or the lowest reading below 0) to its peak. */
+  function drawSpark(x) {
+    const c = x.canvas;
+    if (!c) return;
+    const dpr = window.devicePixelRatio || 1;
+    const wpx = c.clientWidth, hpx = c.clientHeight;
+    if (!wpx || !hpx) return;
+    if (!x.sized) { c.width = Math.round(wpx * dpr); c.height = Math.round(hpx * dpr); x.sized = true; }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, wpx, hpx);
+    const pts = x.hist;
+    if (pts.length < 2) return;
+    const lo = Math.min(0, ...pts.filter((p) => p != null));
+    const hi = x.s?.unit === '%' ? 100 : niceCeil(x.peak * 1.1);
+    const lw = Math.min(8, Math.max(1.25, Math.min(3, hpx / 16)) * tk);
+    const pad = Math.max(1.5, lw / 2);
+    const y = (v) => hpx - pad - ((v - lo) / ((hi - lo) || 1)) * (hpx - 2 * pad);
+    const step = wpx / (HISTORY - 1);
+    const x0 = wpx - (pts.length - 1) * step;
+    const stroke = getComputedStyle(card).getPropertyValue('--muted').trim() || '#94a3b8';
+    ctx.beginPath();
+    let started = false;
+    pts.forEach((v, i) => {
+      if (v == null) { started = false; return; }
+      const px = x0 + i * step;
+      if (!started) { ctx.moveTo(px, y(v)); started = true; } else ctx.lineTo(px, y(v));
+    });
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lw;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.lineTo(wpx, hpx); ctx.lineTo(x0, hpx); ctx.closePath();
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = stroke;
+    ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   /** Colour of the threshold zone a value falls in (for zones drawn on the scale). */
@@ -507,7 +633,7 @@ export function createWidget(w, sensor, tools) {
 
   // ---- graph: rolling line chart on canvas
   function graph() {
-    const body = el('div', 'graph');
+    const body = el('div', `graph pos-${pos}`);
     const r = readout();
     const canvas = el('canvas');
     body.append(r.root, canvas);
@@ -610,20 +736,33 @@ export function suggest(catalog) {
   const isCpu = (s) => s.hardwareType === 'Cpu';
   const isGpu = (s) => s.hardwareType.startsWith('Gpu');
   const named = (re) => (s) => re.test(s.name);
+  // An extra reading for a card, when the PC has it: e.g. power as a number with a small graph under the load gauge.
+  const extra = (pred, show) => {
+    const s = catalog.find(pred);
+    return s ? { extra: [{ sensor: s.id, show }] } : {};
+  };
+  const cpuPower = extra((s) => isCpu(s) && s.type === 'Power' && named(/package|cpu power|ppt/i)(s), 'both');
+  const gpuPower = extra((s) => isGpu(s) && s.type === 'Power' && named(/package|power|board|total/i)(s), 'both');
 
   begin('CPU');
-  pick((s) => isCpu(s) && s.type === 'Load' && named(/total/i)(s), { label: 'CPU load' });
+  pick((s) => isCpu(s) && s.type === 'Load' && named(/total/i)(s), { label: 'CPU load', ...cpuPower, ...(cpuPower.extra ? { w: 2, h: 4 } : {}) });
   pick((s) => isCpu(s) && s.type === 'Temperature' && named(/package|tctl|tdie|core max/i)(s), { label: 'CPU temp', style: 'needle' })
     || pick((s) => isCpu(s) && s.type === 'Temperature', { label: 'CPU temp', style: 'needle' });
   pick((s) => isCpu(s) && s.type === 'Load' && named(/total/i)(s), { label: 'CPU history', type: 'graph', w: 4, h: 3 });
 
   begin('GPU');
-  pick((s) => isGpu(s) && s.type === 'Load' && named(/core/i)(s), { label: 'GPU load', style: 'segments' });
+  pick((s) => isGpu(s) && s.type === 'Load' && named(/core/i)(s), { label: 'GPU load', style: 'segments', ...gpuPower, ...(gpuPower.extra ? { w: 2, h: 4 } : {}) });
   pick((s) => isGpu(s) && s.type === 'Temperature' && named(/core/i)(s), { label: 'GPU temp', style: 'needle' });
   // The driver's own figure first; Windows' D3D counters as a fallback; never shared (system) memory.
-  pick((s) => isGpu(s) && /^gpu memory used$/i.test(s.name), { label: 'VRAM used', type: 'bar', w: 4 })
-    || pick((s) => isGpu(s) && /dedicated memory used/i.test(s.name), { label: 'VRAM used', type: 'bar', w: 4 })
-    || pick((s) => isGpu(s) && named(/memory used/i)(s) && !/shared/i.test(s.name), { label: 'VRAM used', type: 'bar', w: 4 });
+  // The VRAM bar also shows how full it is in %, worked out by the server from used and total.
+  const vramPct = (s) => (catalog.some((p) => p.id === `${s.id}/percent`) ? { extra: [{ sensor: `${s.id}/percent`, show: 'value' }] } : {});
+  const vramPick = (pred) => {
+    const s = catalog.find((x) => (x.type === 'Data' || x.type === 'SmallData') && pred(x));
+    return s ? pick((x) => x.id === s.id, { label: 'VRAM used', type: 'bar', w: 4, ...vramPct(s) }) : null;
+  };
+  vramPick((s) => isGpu(s) && /^gpu memory used$/i.test(s.name))
+    || vramPick((s) => isGpu(s) && /dedicated memory used/i.test(s.name))
+    || vramPick((s) => isGpu(s) && named(/memory used/i)(s) && !/shared/i.test(s.name));
 
   begin('Gaming');
   // Our own frame counter works on any GPU; AMD's driver FPS (via LibreHardwareMonitor) is the fallback.

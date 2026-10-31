@@ -28,6 +28,14 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   bars, and a choice of where the value sits (gauge: top, center, bottom; bars: above, below, beside or inside).
 - Thickness of gauge arcs, bars and graph lines grows and shrinks with the card, and each card has a thickness setting
   (25 to 300 % of that) to make it thinner or thicker.
+- Up to 3 sensors on one card: the main display plus up to 2 more readings, each shown as a value, a small graph, or
+  both (e.g. CPU load with its power draw, a fan's % with its RPM). The suggested layout puts power under the CPU
+  and GPU load gauges and the VRAM % next to the VRAM bar. A graph card can hide its number (graph only).
+- Each card's title and subtitle (the device name by default) can be renamed, and the subtitle hidden.
+- The widget editor's sensor list shows every sensor's live reading, and percentages of how full memory or a drive
+  is are listed with the sizes.
+- Percent used for any "X Used" / "X Total" pair, worked out by the server (e.g. "GPU Memory Used" in % on every GPU
+  vendor).
 - Each PC stores its own dashboard (`/api/dashboard`), so every browser and phone sees the layout prepared for it;
   changes reach open dashboards right away.
 - History: every sensor is recorded for 30 days (`/api/history`); tapping a card opens a chart with a 1, 3, 7, 14 or

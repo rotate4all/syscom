@@ -17,6 +17,8 @@ public sealed class MockSensorSource : ISensorSource
         ("/mock/gpu/temperature/0", "GPU Core", "Mock GPU 16GB", "GpuNvidia", "Temperature", 30, 88),
         ("/mock/gpu/clock/0", "GPU Core", "Mock GPU 16GB", "GpuNvidia", "Clock", 300, 2800),
         ("/mock/gpu/fan/0", "GPU Fan 1", "Mock GPU 16GB", "GpuNvidia", "Fan", 0, 3000),
+        ("/mock/gpu/control/0", "GPU Fan 1", "Mock GPU 16GB", "GpuNvidia", "Control", 0, 100),
+        ("/mock/gpu/power/0", "GPU Package", "Mock GPU 16GB", "GpuNvidia", "Power", 15, 250),
         ("/mock/gpu/smalldata/2", "D3D Dedicated Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 500, 9000),
         ("/mock/gpu/smalldata/3", "D3D Shared Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 50, 400),
         ("/mock/gpu/smalldata/0", "GPU Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 500, 9000),
@@ -52,6 +54,7 @@ public sealed class MockSensorSource : ISensorSource
         // Keep related readings consistent: 32 GB of RAM, frame time matching the frame rate.
         values["/mock/ram/data/1"] = 32 - values["/mock/ram/data/0"];
         values["/frames/frametime"] = 1000 / values["/frames/fps"];
+        values["/mock/gpu/control/0"] = values["/mock/gpu/fan/0"] / 30;   // fan % matching its RPM
         values["/frames/frametime-worst"] = Math.Max(values["/frames/frametime-worst"], values["/frames/frametime"] * 1.3f);
         var changed = _first;
         _first = false;

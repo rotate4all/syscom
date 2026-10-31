@@ -147,6 +147,17 @@ body:not(.editing) .card { cursor: pointer; }
 .card-icon svg { width: 100%; height: 100%; stroke-width: 1.8; }
 @container card (max-height: 100px) { .card .hw { display: none; } }
 .card-body { flex: 1; min-height: 0; display: flex; container-type: size; }
+/* Extra readings under the main display, e.g. a fan's RPM under its % gauge or CPU power under CPU load */
+.card-extra {
+  display: grid; gap: 4px; margin-top: 2px; line-height: 1.25; min-width: 0;
+  font-size: clamp(11px, 6cqmin, 20px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted);
+}
+.card-extra .x-line { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 14px; white-space: nowrap; overflow: hidden; max-height: 1.25em; }
+.card-extra .x-row { display: flex; align-items: center; gap: 8px; min-width: 0; height: clamp(18px, 13cqh, 64px); }
+.card-extra .x-row .x-v { flex: none; min-width: 4.5em; white-space: nowrap; }
+.card-extra .x-row canvas { flex: 1; min-width: 0; height: 100%; display: block; }
+@container card (max-height: 90px) { .card-extra { display: none; } }
+.graph.pos-none .readout { display: none; }
 .card-body > * { flex: 1; min-width: 0; min-height: 0; }
 .num { font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; line-height: 1.1; }
 .unit { font-size: .55em; color: var(--muted); font-weight: 500; margin-left: 2px; }
@@ -303,7 +314,37 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .sheet-head { display: flex; justify-content: space-between; align-items: center; }
 .field { display: grid; gap: 6px; font-size: 13px; color: var(--muted); min-width: 0; }
 .field input, .field select { color: var(--text); font-size: 15px; }
-#w-sensor { height: auto; }
+/* Sensor list: one row per sensor with its live reading on the right, grouped by device. */
+.sensor-list {
+  position: relative; height: 232px; overflow-y: auto; overscroll-behavior: contain; padding: 0 0 4px; outline: none;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; color: var(--text);
+}
+.sensor-list:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.sensor-list .grp-name {
+  position: sticky; top: 0; z-index: 1; padding: 7px 12px 4px; font-size: 12px; font-weight: 700;
+  background: var(--surface); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sensor-list .opt { display: flex; align-items: baseline; gap: 12px; padding: 5px 12px 5px 20px; cursor: pointer; font-size: 14px; }
+.sensor-list .opt .n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sensor-list .opt small { color: var(--muted); font-size: 12px; margin-left: 6px; }
+.sensor-list .opt .v { flex: none; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.sensor-list .opt:hover { background: var(--surface-2); }
+.sensor-list .opt[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 20%, var(--surface)); }
+.sensor-list .opt[aria-selected="true"] .v { color: var(--text); }
+.sensor-list .empty { margin: 0; padding: 24px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+/* Extra readings chosen for a card */
+.extras > span small { opacity: .8; margin-left: 4px; }
+.extra-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.extra-list li {
+  display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 11px; font-size: 14px; color: var(--text);
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
+}
+.extra-list .n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.extra-list .n small { color: var(--muted); font-size: 12px; margin-left: 6px; }
+.extra-list .v { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.extra-list select { width: auto; flex: none; padding: 5px 8px; font-size: 13px; background: var(--surface); }
+.extra-list button { border: 0; background: none; color: var(--muted); cursor: pointer; width: 28px; height: 28px; border-radius: 8px; font-size: 18px; line-height: 1; }
+.extra-list button:hover { background: var(--surface); color: var(--text); }
 /* Sensor picker: device tabs; the active tab opens onto a panel with its reading filters and sensors. */
 #dlg-widget { width: min(600px, 100%); }   /* room for a full row of device tabs on a desktop */
 .picker { display: grid; position: relative; }

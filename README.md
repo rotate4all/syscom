@@ -34,7 +34,8 @@ component by component.
 - **A configurable dashboard per PC, saved on that PC.** Five gauge styles, horizontal and vertical bars, live graphs
   and big numbers, grouped in sections. Drag cards to reorder them, drag a corner to resize them (the content scales
   with the card, bar and line thickness included, and can be made thinner or thicker per card), choose where the value
-  sits, and start from a suggested layout. Every browser and phone that signs
+  sits, put up to 3 sensors on one card (say CPU load with its power draw, each as a number, a small graph or both),
+  rename titles and subtitles, and start from a suggested layout. Every browser and phone that signs
   in sees the same layout, and a phone preview lets you lay it out for phones from your PC.
 - **30 days of history for every sensor.** Tap any card for a chart of the last 1, 3, 7, 14 or 30 days, with the
   lowest, average and highest readings.
@@ -55,7 +56,7 @@ component by component.
 | Area | Sensors |
 | --- | --- |
 | CPU | total and per-core load, clocks, package/core temperatures, power, voltages |
-| GPU (NVIDIA, AMD, Intel) | core/memory load, clocks, temperatures, hot spot, fan speed, power, VRAM used/free |
+| GPU (NVIDIA, AMD, Intel) | core/memory load, clocks, temperatures, hot spot, fan speed, power, VRAM used/free and used in % |
 | Memory | load, used/available |
 | Storage | temperatures (SMART), activity, read/write rates, used space, free/total space per drive |
 | Motherboard | fan speeds, voltages, temperatures via Super I/O |
@@ -97,8 +98,8 @@ yours if it's older. The tray app warns you if PawnIO is ever missing or older t
 - **First visit:** the dashboard is empty. Tap **Suggested layout** to get CPU, GPU, RAM, disk and network
   widgets, or **Add widget** to pick sensors yourself.
 - **Edit:** tap the pencil to enter edit mode. Drag a card to move it (on a touch screen, drag it by its ⠿ handle),
-  drag its bottom-right corner to resize it, ✎ edits it (sensor, display, style, value position, size, thickness,
-  scale, thresholds) and 🗑 removes it. **+ Add section** adds a titled group; drag a section by its handle to move it with
+  drag its bottom-right corner to resize it, ✎ edits it (sensor, with every sensor's live reading in the list;
+  display, style, value position, size, thickness, title and subtitle, more readings on the card, scale, thresholds) and 🗑 removes it. **+ Add section** adds a titled group; drag a section by its handle to move it with
   its cards. Outside edit mode, tap a section title to fold it away.
 - **Phone preview:** on a PC, the phone button next to the pencil shows the dashboard at phone width (4 cells
   across), so you can arrange it for the phones that will view it. Edits there are saved like any other.

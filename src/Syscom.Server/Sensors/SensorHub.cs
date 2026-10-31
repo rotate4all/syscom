@@ -19,6 +19,7 @@ public sealed class SensorHub : BackgroundService
     private readonly ConcurrentDictionary<Guid, int> _subscribers = new();
     private readonly SemaphoreSlim _wake = new(0);
     private readonly ConcurrentDictionary<string, string> _errors = new();
+    private readonly DerivedSensors _derived = new();
 
     private volatile Snapshot _latest = new(0, new Dictionary<string, float>());
     private volatile IReadOnlyList<SensorInfo> _catalog = Array.Empty<SensorInfo>();
@@ -107,9 +108,13 @@ public sealed class SensorHub : BackgroundService
 
         if (catalogChanged || _catalog.Count == 0)
         {
-            _catalog = _sources.SelectMany(s => s.Catalog).ToList();
+            var catalog = _sources.SelectMany(s => s.Catalog).ToList();
+            _derived.Rebuild(catalog);
+            catalog.AddRange(_derived.Catalog);
+            _catalog = catalog;
             Interlocked.Increment(ref _catalogVersion);
         }
+        _derived.Update(values);
         _latest = new Snapshot(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), values);
         try { Polled?.Invoke(_latest); }
         catch (Exception ex) { _log.LogWarning(ex, "History could not take a reading"); }
