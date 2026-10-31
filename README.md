@@ -112,7 +112,8 @@ yours if it's older. The tray app warns you if PawnIO is ever missing or older t
   widgets, or **Add widget** to pick sensors yourself.
 - **Edit:** tap the pencil to enter edit mode. Drag a card to move it (on a touch screen, drag it by its ⠿ handle),
   drag its bottom-right corner to resize it, ✎ edits it (sensor, with every sensor's live reading in the list;
-  display, style, value position, size, thickness, title and subtitle, more readings on the card, scale, thresholds) and 🗑 removes it. **+ Add section** adds a titled group; drag a section by its handle to move it with
+  display, style, value position, size, thickness, title and subtitle, unit (B to TB for sizes, KB/s to GB/s or Mbit/s for
+  data rates), more readings on the card, scale, thresholds) and 🗑 removes it. **+ Add section** adds a titled group; drag a section by its handle to move it with
   its cards. Outside edit mode, tap a section title to fold it away.
 - **Phone layout:** phones have their own layout. On a PC, the phone button next to the pencil shows and edits it at
   phone width (4 cells across). It starts as the desktop layout and becomes separate with the first change made

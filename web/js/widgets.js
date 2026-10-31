@@ -5,22 +5,43 @@ export const HISTORY = 120;
 
 export const COLORS = { min: '#22c55e', med: '#f59e0b', max: '#ef4444' };
 
-/** Memory and storage sizes can be shown in GB or MB. */
+/** Sizes in bytes per unit: binary multiples, as Windows counts them (1 GB = 1024 MB). */
+const SIZE_UNITS = { B: 1, KB: 2 ** 10, MB: 2 ** 20, GB: 2 ** 30, TB: 2 ** 40 };
+/** Data rates in bytes per second per unit. "B/s" is the sensors' own unit, shown scaled to fit (Automatic). */
+const RATE_UNITS = { 'B/s': 1, 'KB/s': 2 ** 10, 'MB/s': 2 ** 20, 'GB/s': 2 ** 30, 'Mbit/s': 125000 };
+
+/**
+ * The units a reading can be shown in, whatever unit its sensor reports: any size unit for memory, drives and VRAM;
+ * Automatic or a fixed unit for data rates. Null when there's no choice.
+ */
 export function unitChoices(sensor) {
-  return sensor && (sensor.unit === 'GB' || sensor.unit === 'MB') ? ['GB', 'MB'] : null;
+  const u = sensor?.unit;
+  if (u in SIZE_UNITS) return Object.keys(SIZE_UNITS);
+  if (u === 'B/s') return ['B/s', 'KB/s', 'MB/s', 'GB/s', 'Mbit/s'];
+  return null;
 }
 
-/** Multiplier from one size unit to another (GB ↔ MB); 1 for everything else. */
+/** How a unit is named in a unit menu. */
+export function unitLabel(unit) {
+  return unit === 'B/s' ? 'Automatic' : unit;
+}
+
+/** Multiplier from one size or rate unit to another; 1 for everything else. */
 export function unitFactor(from, to) {
-  if (from === 'GB' && to === 'MB') return 1024;
-  if (from === 'MB' && to === 'GB') return 1 / 1024;
+  if (from in SIZE_UNITS && to in SIZE_UNITS) return SIZE_UNITS[from] / SIZE_UNITS[to];
+  if (from in RATE_UNITS && to in RATE_UNITS) return RATE_UNITS[from] / RATE_UNITS[to];
   return 1;
 }
 
-/** The unit a widget shows: its chosen size unit, else the sensor's own. */
+/** Decimals that suit a unit when it's picked (sizes in GB or TB and rates in MB/s or more get some). */
+export function decimalsFor(unit) {
+  return { GB: 1, TB: 2, 'MB/s': 1, 'GB/s': 2, 'Mbit/s': 1 }[unit] ?? 0;
+}
+
+/** The unit a reading is shown in: the one chosen for it (w.unit), else the sensor's own. */
 export function displayUnit(w, sensor) {
   const native = sensor?.unit || '';
-  return unitChoices(sensor) && w.unit ? w.unit : native;
+  return w?.unit && unitChoices(sensor)?.includes(w.unit) ? w.unit : native;
 }
 
 /**
@@ -139,6 +160,7 @@ export function extrasOf(w) {
       align: EXTRA_ALIGN.some(([k]) => k === e.align) ? e.align : 'center',
       size: EXTRA_SIZE.some(([k]) => k === e.size) ? e.size : 'm',
       ...(typeof e.label === 'string' ? { label: e.label.trim().slice(0, MAX_EXTRA_LABEL) } : {}),
+      ...(typeof e.unit === 'string' && e.unit ? { unit: e.unit } : {}),
     });
   }
   return out.slice(0, MAX_EXTRA);
@@ -148,11 +170,14 @@ function setText(node, text) {
   if (node.textContent !== text) node.textContent = text;
 }
 
-/** A reading as short text with its unit ("1450 RPM", "62 °C", "1.250 V"), for lists and extra readings. */
-export function readingText(sensor, v) {
-  const unit = sensor?.unit || '';
+/**
+ * A reading as short text with its unit ("1450 RPM", "62 °C", "1.250 V"), for lists and extra readings, optionally
+ * in another unit than the sensor's (`unit`, one of unitChoices).
+ */
+export function readingText(sensor, v, unit = sensor?.unit || '') {
   if (v == null || isNaN(v)) return '–';
-  const whole = ['%', '°C', 'RPM', 'MHz', 'Hz', 'FPS', 'MB', 'dBA', 'mWh', 'L/h'].includes(unit);
+  v *= unitFactor(sensor?.unit, unit);
+  const whole = ['%', '°C', 'RPM', 'MHz', 'Hz', 'FPS', 'B', 'KB', 'MB', 'dBA', 'mWh', 'L/h'].includes(unit);
   const f = format(v, unit, unit === 'V' ? 3 : whole || Math.abs(v) >= 100 ? 0 : 1);
   return `${f.n}${f.u ? ' ' + f.u : ''}`;
 }
@@ -200,7 +225,14 @@ export function format(v, unit, decimals = 0) {
     while (Math.abs(v) >= 1024 && i < steps.length - 1) { v /= 1024; i++; }
     return { n: v.toFixed(i === 0 ? 0 : 1), u: steps[i] };
   }
-  return { n: Number(v).toFixed(decimals), u: unit };
+  return { n: group(Number(v).toFixed(decimals)), u: unit };
+}
+
+/** Long numbers (a size in bytes, say) get their thousands set apart with a narrow space: 12 884 901 888. */
+function group(n) {
+  const [int, frac] = n.split('.');
+  if (int.replace('-', '').length < 6) return n;
+  return int.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') + (frac ? `.${frac}` : '');
 }
 
 function niceCeil(x) {
@@ -457,7 +489,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
 
   function paintExtra(x) {
     const name = extraLabel(x, x.s, sensor);
-    const reading = x.s ? readingText(x.s, x.v) : '–';
+    const reading = x.s ? readingText(x.s, x.v, displayUnit(x, x.s)) : '–';
     const text = (name ? `${name} ` : '') + reading;
     if (x.text) {
       const cut = reading.indexOf(' ');

@@ -20,7 +20,8 @@ All notable changes are listed here. Versions follow [semantic versioning](https
 - Frame rate, frame time and worst frame time for any GPU, from Windows' graphics present events (no injection);
   in the suggested layout.
 - Widget editor: device tabs with reading filters nested under the chosen tab, instead of one long sensor list;
-  GB/MB choice for memory and storage sizes; bars for VRAM, RAM and drive space scale to the live total.
+  a unit per reading (sizes in B, KB, MB, GB or TB whatever unit the sensor reports; data rates automatic or fixed
+  in KB/s, MB/s, GB/s or Mbit/s, for extra readings too); bars for VRAM, RAM and drive space scale to the live total.
 - Dashboard layout: cards on a grid of columns and rows (4 columns on a phone), resizable by dragging a corner, with
   content that scales to the card; drag and drop reordering in edit mode; sections (titled groups that can be moved,
   renamed and folded away); a device icon on every card; phone preview on wide screens.

@@ -4,7 +4,7 @@ import {
 } from './store.js';
 import { Connection } from './connection.js';
 import {
-  createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom, displayUnit,
+  createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, unitLabel, decimalsFor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
   MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, MAX_EXTRA_LABEL, extraLabel, extrasOf, readingText, HISTORY,
 } from './widgets.js';
@@ -654,12 +654,16 @@ function takeFrame(conn, frame) {
 function paintLive() {
   const conn = conns.get(editTarget?.dev.key);
   if (!conn) return;
-  const put = (el, id) => {
-    const text = readingText(conn.sensors.get(id), liveValues.get(id));
+  const put = (el, id, unit) => {
+    const s = conn.sensors.get(id);
+    const text = readingText(s, liveValues.get(id), unit || s?.unit);
     if (el.textContent !== text) el.textContent = text;
   };
   for (const row of dlgWidget.querySelectorAll('.sensor-list .opt')) put(row.lastElementChild, row.dataset.id);
-  for (const li of $('#w-extra-list').children) put(li.querySelector('.v'), li.dataset.id);
+  for (const li of $('#w-extra-list').children) {
+    const x = extrasShown.find((e) => e.sensor === li.dataset.id);
+    put(li.querySelector('.v'), li.dataset.id, x && displayUnit(x, conn.sensors.get(x.sensor)));
+  }
 }
 
 // ---------- sensor list: a listbox, so every row can show the sensor's live reading
@@ -855,10 +859,11 @@ function fillWidgetForm(w, sensor, catalog) {
     $(`#t${i}-c`).value = t.color || fallback[i];
   }
 
-  // GB / MB for memory and storage sizes. The form's numbers are in the unit shown.
+  // B … TB for sizes, Automatic or a fixed unit for data rates. The form's numbers are in the unit shown.
   const choices = unitChoices(sensor);
   $('#w-unit-field').hidden = !choices;
-  unitShown = choices ? (w.unit && choices.includes(w.unit) ? w.unit : sensor.unit) : null;
+  unitShown = choices ? displayUnit(w, sensor) : null;
+  $('#w-unit').replaceChildren(...(choices || []).map((u) => new Option(unitLabel(u), u)));
   if (choices) $('#w-unit').value = unitShown;
 
   // "Scale max follows the total": live total VRAM / RAM / drive size instead of a fixed number.
@@ -919,13 +924,15 @@ function renderExtras() {
     const s = conn?.sensors.get(x.sensor);
     const li = document.createElement('li');
     li.dataset.id = x.sensor;
-    const choice = (key, label, options) => `<label><span>${label}</span><select data-k="${key}">`
-      + options.map(([k, l]) => `<option value="${k}"${k === x[key] ? ' selected' : ''}>${l}</option>`).join('') + '</select></label>';
+    const choice = (key, label, options, current = x[key]) => `<label><span>${label}</span><select data-k="${key}">`
+      + options.map(([k, l]) => `<option value="${k}"${k === current ? ' selected' : ''}>${l}</option>`).join('') + '</select></label>';
+    const units = unitChoices(s);
     li.innerHTML = `<div class="x-head"><span class="n">${escapeHtml(s ? s.name : 'Sensor not available')}<small>${escapeHtml(s ? `${typeLabel(s)} · ${s.hardware}` : '')}</small></span>`
-      + `<span class="v">${escapeHtml(readingText(s, liveValues.get(x.sensor)))}</span>`
+      + `<span class="v">${escapeHtml(readingText(s, liveValues.get(x.sensor), displayUnit(x, s)))}</span>`
       + `<button type="button" title="Remove from this card" aria-label="Remove">×</button></div>`
       + `<div class="x-opts"><label class="x-label"><span>Label</span><input type="text" data-k="label" maxlength="${MAX_EXTRA_LABEL}" placeholder="None" autocomplete="off"></label>`
-      + `${choice('show', 'Show', EXTRA_SHOW)}${choice('align', 'Position', EXTRA_ALIGN)}${choice('size', 'Size', EXTRA_SIZE)}</div>`;
+      + `${choice('show', 'Show', EXTRA_SHOW)}${choice('align', 'Position', EXTRA_ALIGN)}${choice('size', 'Size', EXTRA_SIZE)}`
+      + `${units ? choice('unit', 'Unit', units.map((u) => [u, unitLabel(u)]), displayUnit(x, s)) : ''}</div>`;
     // The field shows what the card will show: the reading's own label, or the name it gets by default. Empty = none.
     const labelIn = li.querySelector('input[data-k="label"]');
     labelIn.value = extraLabel(x, s, conn?.sensors.get(sensorList.value));
@@ -933,7 +940,7 @@ function renderExtras() {
     // A graph without its number has no text to label, place or size.
     const syncOpts = () => li.querySelectorAll('[data-k]:not([data-k="show"])').forEach((c) => { c.disabled = x.show === 'graph'; });
     li.querySelectorAll('select').forEach((sel) => {
-      sel.onchange = () => { x[sel.dataset.k] = sel.value; extrasTouched = true; syncOpts(); };
+      sel.onchange = () => { x[sel.dataset.k] = sel.value; extrasTouched = true; syncOpts(); paintLive(); };
     });
     syncOpts();
     li.querySelector('button').onclick = () => { extrasShown = extrasShown.filter((y) => y !== x); extrasTouched = true; renderExtras(); };
@@ -1052,15 +1059,15 @@ $('#w-search').addEventListener('input', () => {
 $('#w-sensor').addEventListener('change', onSensorPicked);
 $('#w-total').addEventListener('change', syncTotal);
 
-// Switching GB ↔ MB converts the numbers already in the form.
+// Switching the unit converts the numbers already in the form.
 $('#w-unit').addEventListener('change', () => {
   const next = $('#w-unit').value;
   const f = unitFactor(unitShown, next);
   for (const id of ['#w-min', '#w-max', '#t0-v', '#t1-v', '#t2-v']) {
     const v = $(id).value;
-    if (v !== '') $(id).value = String(+(Number(v) * f).toFixed(3));
+    if (v !== '') $(id).value = String(+(Number(v) * f).toPrecision(6));
   }
-  $('#w-dec').value = next === 'MB' ? '0' : '1';
+  $('#w-dec').value = String(decimalsFor(next));
   unitShown = next;
 });
 
@@ -1086,7 +1093,7 @@ function readForm(id) {
     min: num('#w-min') ?? 0,
     max: useTotal ? null : num('#w-max'),
     maxFrom: useTotal ? total : [],
-    unit: unitChoices(sensor) ? $('#w-unit').value : undefined,
+    unit: unitChoices(sensor) && $('#w-unit').value !== sensor.unit ? $('#w-unit').value : undefined,
     decimals: Number($('#w-dec').value),
     thresholds: [0, 1, 2].map((i) => ({ value: num(`#t${i}-v`), color: $(`#t${i}-c`).value })),
   };
