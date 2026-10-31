@@ -241,10 +241,14 @@ app.Lifetime.ApplicationStarted.Register(() =>
     Console.WriteLine();
     Console.WriteLine($"  SYSCOM {version}  ·  {cfg.Name}");
     Console.WriteLine($"  Sensors: {string.Join(", ", hub.SourceNames)} ({hub.Catalog.Count})");
-    foreach (var ip in LanDiscovery.LocalAddresses()) Console.WriteLine($"  Open:    http://{ip}:{cfg.Port}");
+    var addresses = LanDiscovery.LocalAddressesRanked().ToList();
+    var lan = addresses.FirstOrDefault().Address ?? "<this PC>";
+    Console.WriteLine($"  Open:    http://{lan}:{cfg.Port}   (on this PC: http://localhost:{cfg.Port})");
+    if (addresses.Count > 1)
+        Console.WriteLine($"  Also on: {string.Join(", ", addresses.Skip(1).Select(a => a.Address))}" +
+                          (addresses.Skip(1).Any(a => !a.HasGateway) ? " (virtual adapters, usually not reachable from a phone)" : ""));
     if (tls is not null)
     {
-        var lan = LanDiscovery.LocalAddresses().FirstOrDefault() ?? "<this PC>";
         Console.WriteLine($"  HTTPS:   port {cfg.HttpsPort} · phone setup: http://{lan}:{cfg.Port}/trust (or tray app → Set up phone)");
         Console.WriteLine($"  CA SHA-256: {tls.CaFingerprint}");
     }

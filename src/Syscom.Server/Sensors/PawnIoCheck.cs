@@ -28,7 +28,7 @@ public static class PawnIoCheck
         if (!OperatingSystem.IsWindows()) return null;
         var installed = InstalledVersion();
         if (installed is null)
-            return "PawnIO driver not found: CPU temperatures and motherboard sensors will be missing. Install the latest with: winget install namazso.PawnIO";
+            return "PawnIO driver not found: CPU temperatures and motherboard sensors will be missing. install.ps1 installs it; for a run from source use: winget install namazso.PawnIO (then restart SYSCOM)";
         if (Version.TryParse(installed, out var have) && Version.TryParse(minimum, out var need) && have < need)
             return $"PawnIO {installed} is older than {minimum} (older drivers had security issues). Update with: winget upgrade namazso.PawnIO";
         return null;

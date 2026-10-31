@@ -138,12 +138,22 @@ public sealed class LanDiscovery : BackgroundService
         return set;
     }
 
-    /// <summary>LAN IPv4 addresses of this machine, for printing connect URLs.</summary>
-    public static IEnumerable<string> LocalAddresses() =>
+    /// <summary>
+    /// LAN IPv4 addresses of this machine, for connect URLs and the HTTPS certificate. The real network comes first:
+    /// adapters with a default gateway (Wi-Fi, Ethernet) before virtual ones without (Hyper-V, WSL, VMware,
+    /// VirtualBox), which phones usually can't reach.
+    /// </summary>
+    public static IEnumerable<string> LocalAddresses() => LocalAddressesRanked().Select(a => a.Address);
+
+    public static IEnumerable<(string Address, bool HasGateway)> LocalAddressesRanked() =>
         NetworkInterface.GetAllNetworkInterfaces()
             .Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-            .SelectMany(n => n.GetIPProperties().UnicastAddresses)
-            .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork)
-            .Select(a => a.Address.ToString())
-            .Distinct();
+            .Select(n => n.GetIPProperties())
+            .Select(p => (Props: p, HasGateway: p.GatewayAddresses.Any(g =>
+                g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any))))
+            .OrderBy(x => x.HasGateway ? 0 : 1)
+            .SelectMany(x => x.Props.UnicastAddresses
+                .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork)
+                .Select(a => (Address: a.Address.ToString(), x.HasGateway)))
+            .DistinctBy(a => a.Address);
 }

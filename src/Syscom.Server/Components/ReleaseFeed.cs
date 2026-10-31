@@ -26,8 +26,11 @@ public sealed class ReleaseFeed
         if (!Configured) return null;
         if (_cached is null || DateTime.UtcNow - _fetched > TimeSpan.FromMinutes(5))
         {
-            var json = await http.GetStringAsync(_cfg.UpdateFeedUrl, ct);
-            _cached = JsonDocument.Parse(json);
+            using var resp = await http.GetAsync(_cfg.UpdateFeedUrl, ct);
+            // No release published yet (or a release without a feed): nothing newer to offer, not an error.
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+            resp.EnsureSuccessStatusCode();
+            _cached = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
             _fetched = DateTime.UtcNow;
         }
         if (!_cached.RootElement.TryGetProperty(key, out var e)) return null;

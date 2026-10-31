@@ -112,21 +112,10 @@ internal sealed class PhoneSetupForm : Form
         old?.Dispose();
     }
 
-    /// <summary>Home networks first (192.168/10/172.16), then VPN and link-local addresses.</summary>
+    /// <summary>The server lists the real network first (adapters with a gateway); only link-local goes last.</summary>
     private static IEnumerable<string> Order(IEnumerable<string> urls) => urls.OrderBy(u =>
-    {
-        if (!Uri.TryCreate(u, UriKind.Absolute, out var uri) || !IPAddress.TryParse(uri.Host, out var ip)) return 9;
-        var b = ip.GetAddressBytes();
-        return b[0] switch
-        {
-            192 when b[1] == 168 => 0,
-            10 => 1,
-            172 when b[1] is >= 16 and < 32 => 2,
-            100 when b[1] is >= 64 and < 128 => 4,
-            169 when b[1] == 254 => 8,
-            _ => 5,
-        };
-    });
+        Uri.TryCreate(u, UriKind.Absolute, out var uri) && IPAddress.TryParse(uri.Host, out var ip) &&
+        ip.GetAddressBytes() is [169, 254, ..] ? 1 : 0);
 
     /// <summary>Draws the code at the largest whole-pixel scale that fits, with the standard 4-module quiet zone.</summary>
     private static Bitmap Render(QrCode code, int maxPixels)
