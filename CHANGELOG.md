@@ -39,7 +39,8 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   preview use the phone layout, which follows the desktop one until it is changed. Graphs keep their history when
   cards are rebuilt or the layout switches.
 - The widget editor's sensor list shows every sensor's live reading, and percentages of how full memory or a drive
-  is are listed with the sizes.
+  is are listed with the sizes. Adding another reading to a card uses the same kind of list (device tabs, search,
+  live readings, this card's device first).
 - Percent used for any "X Used" / "X Total" pair, worked out by the server (e.g. "GPU Memory Used" in % on every GPU
   vendor).
 - Each PC stores its own dashboard (`/api/dashboard`), so every browser and phone sees the layout prepared for it;

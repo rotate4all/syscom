@@ -51,7 +51,10 @@ internal sealed class PhoneSetupForm : Form
               "certificate once; after that the dashboard opens securely and can be installed as an app."
             : "HTTPS is turned off on this PC (HttpsEnabled in config.json), so phones can open the dashboard but only " +
               "add a shortcut, not install it as an app. Scan this code to open the dashboard.", width));
-        layout.Controls.Add(Wrapped("The phone must be on the same network as this PC.", width, SystemColors.GrayText));
+        layout.Controls.Add(Wrapped("The phone must be on the same network as this PC. If the page doesn't open, let the " +
+            "phone's browser reach devices on your network: on Android, give Chrome the Nearby devices permission " +
+            "(Settings → Apps → Chrome → Permissions); on iPhone, browsers other than Safari need Local Network access " +
+            "(Settings → Privacy & Security → Local Network).", width, SystemColors.GrayText));
 
         var addresses = Order(status.Urls).ToList();
         if (addresses.Count == 0)

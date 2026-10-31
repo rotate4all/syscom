@@ -344,6 +344,11 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .extra-list .n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .extra-list .n small { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .extra-list .v { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.add-reading { justify-self: start; }
+.add-reading:disabled { cursor: default; opacity: .7; }
+.extra-picker { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; }
+.extra-picker.searching .tabs button.active { background: none; border-color: transparent; color: var(--muted); }
+.sensor-list.short { height: 196px; }
 .extra-list select { width: auto; flex: none; padding: 5px 8px; font-size: 13px; background: var(--surface); }
 .extra-list button { border: 0; background: none; color: var(--muted); cursor: pointer; width: 28px; height: 28px; border-radius: 8px; font-size: 18px; line-height: 1; }
 .extra-list button:hover { background: var(--surface); color: var(--text); }

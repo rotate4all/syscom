@@ -100,7 +100,16 @@
       <div class="field extras" id="w-extra-field">
         <span>Also show on this card <small>up to 2 more readings under the main one, each as a value, a small graph or both</small></span>
         <ul class="extra-list" id="w-extra-list" hidden></ul>
-        <select id="w-extra-add" aria-label="Add a reading to this card"></select>
+        <button type="button" class="ghost add-reading" id="w-extra-add" aria-expanded="false" aria-controls="w-extra-picker">+ Add a reading</button>
+        <div class="extra-picker" id="w-extra-picker" hidden>
+          <input type="search" id="w-extra-search" placeholder="Search all sensors…" autocomplete="off" aria-label="Search sensors to add">
+          <div class="picker">
+            <div class="tabs" id="w-extra-dev" role="tablist" aria-label="Device"></div>
+            <div class="subpanel">
+              <div id="w-extra-pick" class="sensor-list short" role="listbox" tabindex="0" aria-label="Reading to add"></div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="row">

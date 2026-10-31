@@ -87,6 +87,11 @@ appears depends on your hardware.
 3. Open one of the printed addresses (for example `http://192.168.1.20:47810`) on your phone and sign in with the
    printed password. Change it from the SYSCOM tray icon.
 
+If the phone can't open the address (Chrome on Android shows errors such as `ERR_TOO_MANY_RETRIES` or
+`ERR_ADDRESS_UNREACHABLE`), the browser isn't allowed to reach devices on your network yet. On Android, give Chrome
+the **Nearby devices** permission (Settings → Apps → Chrome → Permissions). On iPhone, browsers other than Safari
+need **Local Network** access (Settings → Privacy & Security → Local Network).
+
 The installer puts SYSCOM in `C:\Program Files\SYSCOM`, registers the **SYSCOM** Windows service, opens TCP 47810
 (HTTP), TCP 47812 (HTTPS) and UDP 47811 on private networks only, installs or updates the PawnIO driver if needed, and starts the tray app at
 logon. Remove it with `uninstall.ps1` in the same folder.

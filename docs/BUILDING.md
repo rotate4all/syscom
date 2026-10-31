@@ -64,6 +64,10 @@ New-NetFirewallRule -DisplayName 'SYSCOM dev discovery' -Direction Inbound -Prot
 The network must be a Private one (`Get-NetConnectionProfile`). Remove the rules again with
 `Remove-NetFirewallRule -DisplayName 'SYSCOM dev*'`.
 
+If the firewall is open and Chrome on an Android phone still fails (often with `ERR_TOO_MANY_RETRIES`), Chrome lacks
+the Android **Nearby devices** permission, which it needs to reach LAN addresses (Settings → Apps → Chrome →
+Permissions).
+
 ## Package
 
 ```powershell

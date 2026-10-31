@@ -624,6 +624,7 @@ function openWidgetEditor(dev, widget, sectionId = null) {
   editTarget = { dev, widget, sectionId };
   extrasShown = [];
   extrasTouched = false;
+  $('#w-extra-picker').hidden = true;
   $('#widget-title').textContent = widget ? 'Edit widget' : 'Add widget';
   $('#w-search').value = '';
   const current = widget && conn.sensors.get(widget.sensor);
@@ -654,7 +655,7 @@ function paintLive() {
     const text = readingText(conn.sensors.get(id), liveValues.get(id));
     if (el.textContent !== text) el.textContent = text;
   };
-  for (const row of sensorList.querySelectorAll('.opt')) put(row.lastElementChild, row.dataset.id);
+  for (const row of dlgWidget.querySelectorAll('.sensor-list .opt')) put(row.lastElementChild, row.dataset.id);
   for (const li of $('#w-extra-list').children) put(li.querySelector('.v'), li.dataset.id);
 }
 
@@ -726,7 +727,8 @@ function renderChoices(host, cats, current, counts, onPick, { tabs = false } = {
     b.onclick = () => onPick(key);
     host.append(b);
   }
-  if (tabs) showActiveTab();
+  if (tabs && host.id === 'w-dev') showActiveTab();
+  else if (tabs) host.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /** Keeps the chosen tab in view and fades the row's ends when more tabs are hidden past them. */
@@ -781,15 +783,23 @@ function fillSensorList(catalog, selectedId) {
     ? catalog.filter((s) => q.split(/\s+/).every((part) => `${s.hardware} ${s.name} ${s.type}`.toLowerCase().includes(part)))
     : inDev.filter((s) => pick.read === 'all' || readingCat(s) === pick.read);
 
-  sel.replaceChildren();
-  sel.scrollTop = 0;
-  const groups = new Map();
+  renderSensorRows(sel, list, 'w-opt');
+  markSensor(list.some((s) => s.id === selectedId) ? selectedId : list[0]?.id || '');
+  revealSensor();
+}
+
+/** Sensor rows grouped by device, each with its live reading. `first` puts one device on top, with a note. */
+function renderSensorRows(host, list, idPrefix, { first = null, firstNote = '' } = {}) {
+  host.replaceChildren();
+  host.scrollTop = 0;
+  const groups = new Map(first ? [[first, []]] : []);
   for (const s of list) {
     if (!groups.has(s.hardware)) groups.set(s.hardware, []);
     groups.get(s.hardware).push(s);
   }
   let n = 0;
   for (const [hw, items] of groups) {
+    if (!items.length) continue;
     const g = document.createElement('div');
     g.className = 'grp';
     g.setAttribute('role', 'group');
@@ -797,23 +807,22 @@ function fillSensorList(catalog, selectedId) {
     const name = document.createElement('div');
     name.className = 'grp-name';
     name.setAttribute('aria-hidden', 'true');
-    name.textContent = hw;
+    name.textContent = hw === first && firstNote ? `${hw} (${firstNote})` : hw;
     g.append(name);
     for (const s of items) {
       const o = document.createElement('div');
       o.className = 'opt';
-      o.id = `w-opt-${n++}`;
+      o.id = `${idPrefix}-${n++}`;
       o.dataset.id = s.id;
       o.setAttribute('role', 'option');
+      o.setAttribute('aria-selected', 'false');
       o.innerHTML = `<span class="n">${escapeHtml(s.name)}<small>${escapeHtml(typeLabel(s))}</small></span>`
         + `<span class="v">${escapeHtml(readingText(s, liveValues.get(s.id)))}</span>`;
       g.append(o);
     }
-    sel.append(g);
+    host.append(g);
   }
-  if (!list.length) sel.innerHTML = '<p class="empty">No sensor matches that.</p>';
-  markSensor(list.some((s) => s.id === selectedId) ? selectedId : list[0]?.id || '');
-  revealSensor();
+  if (!list.length) host.innerHTML = '<p class="empty">No sensor matches that.</p>';
 }
 
 function fillWidgetForm(w, sensor, catalog) {
@@ -917,38 +926,78 @@ function renderExtras() {
   }
   list.hidden = !extrasShown.length;
 
-  // The add menu: this device's sensors first, then the others by device.
   const add = $('#w-extra-add');
   const full = extrasShown.length >= MAX_EXTRA;
-  add.replaceChildren(new Option(full ? `That's ${MAX_EXTRA + 1} sensors, the most a card shows` : '+ Add a reading…', ''));
+  add.textContent = full ? `${MAX_EXTRA + 1} sensors is the most a card shows` : '+ Add a reading';
   add.disabled = full || !conn;
-  if (add.disabled) return;
-  const main = conn.sensors.get(sensorList.value);
-  const taken = new Set([sensorList.value, ...extrasShown.map((x) => x.sensor)]);
-  const groups = new Map();
-  if (main) groups.set(main.hardware, []);
-  for (const s of conn.catalog) {
-    if (taken.has(s.id)) continue;
-    if (!groups.has(s.hardware)) groups.set(s.hardware, []);
-    groups.get(s.hardware).push(s);
-  }
-  for (const [hw, items] of groups) {
-    if (!items.length) continue;
-    const og = document.createElement('optgroup');
-    og.label = main && hw === main.hardware ? `${hw} (this card's device)` : hw;
-    for (const s of items) og.append(new Option(`${s.name} · ${typeLabel(s)} · ${readingText(s, liveValues.get(s.id))}`, s.id));
-    add.append(og);
-  }
+  add.setAttribute('aria-expanded', String(!$('#w-extra-picker').hidden));
+  if (add.disabled) showExtraPicker(false);
+  else if (!$('#w-extra-picker').hidden) fillExtraPicker();
 }
-$('#w-extra-add').addEventListener('change', (e) => {
-  const id = e.target.value;
-  if (!id) return;
+
+// The picker for an extra reading: device tabs (this card's device first) and a search, rows with live readings.
+const extraPick = { dev: null, at: -1 };
+function fillExtraPicker() {
+  const conn = conns.get(editTarget?.dev.key);
+  if (!conn) return;
+  const q = $('#w-extra-search').value.trim().toLowerCase();
+  const taken = new Set([sensorList.value, ...extrasShown.map((x) => x.sensor)]);
+  const pool = conn.catalog.filter((s) => !taken.has(s.id));
+  const main = conn.sensors.get(sensorList.value);
+  const counts = new Map();
+  for (const s of pool) counts.set(deviceCat(s), (counts.get(deviceCat(s)) || 0) + 1);
+  if (!counts.get(extraPick.dev)) extraPick.dev = main && counts.get(deviceCat(main)) ? deviceCat(main) : [...counts.keys()][0];
+  renderChoices($('#w-extra-dev'), DEVICE_CATS, extraPick.dev, counts, (k) => {
+    extraPick.dev = k;
+    $('#w-extra-search').value = '';
+    fillExtraPicker();
+  }, { tabs: true });
+  $('#w-extra-picker').classList.toggle('searching', q.length > 0);
+  const list = q
+    ? pool.filter((s) => q.split(/\s+/).every((part) => `${s.hardware} ${s.name} ${s.type}`.toLowerCase().includes(part)))
+    : pool.filter((s) => deviceCat(s) === extraPick.dev);
+  renderSensorRows($('#w-extra-pick'), list, 'w-xopt', { first: main?.hardware, firstNote: "this card's device" });
+  extraPick.at = -1;
+}
+function showExtraPicker(on) {
+  $('#w-extra-picker').hidden = !on;
+  $('#w-extra-add').setAttribute('aria-expanded', String(on));
+  if (!on) return;
+  $('#w-extra-search').value = '';
+  extraPick.dev = null;
+  fillExtraPicker();
+  $('#w-extra-search').focus();
+}
+function addExtra(id) {
+  if (!id || extrasShown.length >= MAX_EXTRA) return;
   const s = conns.get(editTarget?.dev.key)?.sensors.get(id);
-  // Power, clocks and the like read well as a number with a small graph; a fan's RPM next to its % as a number.
+  // Power, loads and data rates read well as a number with a small graph; a fan's RPM next to its % as a number.
   extrasShown.push({ sensor: id, show: s && ['Power', 'Throughput', 'Load'].includes(s.type) ? 'both' : 'value' });
   extrasTouched = true;
+  showExtraPicker(false);
   renderExtras();
-});
+  $('#w-extra-add').focus();
+}
+$('#w-extra-add').addEventListener('click', () => showExtraPicker($('#w-extra-picker').hidden));
+$('#w-extra-search').addEventListener('input', fillExtraPicker);
+$('#w-extra-pick').addEventListener('click', (e) => addExtra(e.target.closest('.opt')?.dataset.id));
+// Keyboard: arrows move through the rows (from the search box too), Enter adds, Escape closes the picker.
+function extraKeys(e) {
+  const rows = [...$('#w-extra-pick').querySelectorAll('.opt')];
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); showExtraPicker(false); $('#w-extra-add').focus(); return; }
+  if (e.key === 'Enter') { e.preventDefault(); addExtra(rows[extraPick.at]?.dataset.id ?? (rows.length === 1 ? rows[0].dataset.id : null)); return; }
+  const to = { ArrowDown: extraPick.at + 1, ArrowUp: extraPick.at - 1, Home: 0, End: rows.length - 1 }[e.key];
+  if (to === undefined || !rows.length) return;
+  e.preventDefault();
+  extraPick.at = Math.max(0, Math.min(rows.length - 1, to));
+  rows.forEach((r, i) => r.setAttribute('aria-selected', String(i === extraPick.at)));
+  const row = rows[extraPick.at];
+  $('#w-extra-pick').setAttribute('aria-activedescendant', row.id);
+  row.scrollIntoView({ block: 'nearest' });
+  if (document.activeElement !== $('#w-extra-search')) $('#w-extra-pick').focus();
+}
+$('#w-extra-search').addEventListener('keydown', extraKeys);
+$('#w-extra-pick').addEventListener('keydown', extraKeys);
 $('#w-style').addEventListener('change', () => {
   if ($('#w-type').value === 'gauge') $('#w-pos').value = defaultPosition('gauge', $('#w-style').value);
 });
