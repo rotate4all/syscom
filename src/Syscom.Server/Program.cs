@@ -27,7 +27,18 @@ if (options.ShowHelp)
     return 0;
 }
 
-var cfg = ServerConfig.Load(options.ConfigPath ?? ServerConfig.DefaultPath());
+ServerConfig cfg;
+try
+{
+    cfg = ServerConfig.Load(options.ConfigPath ?? ServerConfig.DefaultPath());
+}
+catch (UnauthorizedAccessException)
+{
+    // The data folder (password hash, certificate keys) is restricted to SYSTEM and Administrators.
+    Console.Error.WriteLine($"SYSCOM can't read its settings in {SyscomPaths.DataDir}: that folder is for administrators only.");
+    Console.Error.WriteLine("Run this from a terminal opened with \"Run as administrator\" (it's also needed to read all sensors).");
+    return 1;
+}
 if (options.Port is { } port) cfg.Port = port;
 if (options.HttpsPort is { } httpsPort) cfg.HttpsPort = httpsPort;
 if (options.Name is { } name) cfg.Name = name;
