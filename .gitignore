@@ -5,3 +5,4 @@ dist/
 *.user
 .vscode/
 .idea/
+frame-trace/

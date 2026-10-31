@@ -74,6 +74,7 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
     private IntPtr _loggerName;
     private long _lastPoll;
     private int _chosen;
+    private (int Pid, Signal? Kind) _announced;   // the native frame source last logged
     private string? _startError;
 
     private const ulong InvalidTrace = ulong.MaxValue;
@@ -89,6 +90,8 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
     public IReadOnlyList<SensorInfo> Catalog { get; private set; }
 
     private enum Signal { ReflexSimulation, ReflexPresent, XefgRendered }
+
+    private static readonly Signal[] NativeSignals = { Signal.ReflexSimulation, Signal.ReflexPresent, Signal.XefgRendered };
 
     private static IReadOnlyList<SensorInfo> BuildCatalog(string app) => new[]
     {
@@ -172,9 +175,20 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
         if (_chosen != 0 && stats.TryGetValue(_chosen, out var s))
         {
             // Native frames: the strongest signal this app gives; frames AFMF adds are shown on top of its presents.
-            var native = new[] { Signal.ReflexSimulation, Signal.ReflexPresent, Signal.XefgRendered }
-                .Select(k => nativeRates.GetValueOrDefault((_chosen, k)))
-                .FirstOrDefault(r => r is not null);
+            Signal? source = null;
+            double? native = null;
+            foreach (var kind in NativeSignals)
+            {
+                if (nativeRates.GetValueOrDefault((_chosen, kind)) is not { } rate) continue;
+                (source, native) = (kind, rate);
+                break;
+            }
+            if (source is not null && _announced != (_chosen, source))
+            {
+                _announced = (_chosen, source);
+                _log.LogInformation("Native frame rate of {App} from {Source}", app,
+                    source == Signal.XefgRendered ? "XeSS frame types" : "NVIDIA Reflex markers");
+            }
             var added = native is null ? afmfRate ?? 0 : 0;
             values[FpsId] = (float)(s.Fps + added);
             values[NativeFpsId] = (float)(native ?? s.Fps);
@@ -254,10 +268,16 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
             Marshal.FreeHGlobal((IntPtr)props);
         }
 
-        foreach (var provider in new[] { DxgiProvider, D3d9Provider, PclProvider, FrameTypeProvider })
+        // Present events are informational. Reflex's markers are TraceLogging events without a level, which means
+        // verbose, so that provider (and the frame type one) must be enabled at the verbose level or nothing arrives.
+        foreach (var (provider, level) in new[]
+        {
+            (DxgiProvider, TraceLevelInformation), (D3d9Provider, TraceLevelInformation),
+            (PclProvider, TraceLevelVerbose), (FrameTypeProvider, TraceLevelVerbose),
+        })
         {
             var guid = provider;
-            var err = EnableTraceEx2(_session, &guid, EnableProvider, TraceLevelInformation, ulong.MaxValue, 0, 0, null);
+            var err = EnableTraceEx2(_session, &guid, EnableProvider, level, ulong.MaxValue, 0, 0, null);
             if (err != 0) _log.LogWarning("Could not enable frame events from {Provider} (error {Error})", provider, err);
         }
 
@@ -389,6 +409,7 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
     private const uint ControlStop = 1;
     private const uint EnableProvider = 1;
     private const byte TraceLevelInformation = 4;
+    private const byte TraceLevelVerbose = 5;
     private const uint ProcessTraceModeRealTime = 0x00000100;
     private const uint ProcessTraceModeRawTimestamp = 0x00001000;
     private const uint ProcessTraceModeEventRecord = 0x10000000;

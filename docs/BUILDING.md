@@ -68,6 +68,20 @@ If the firewall is open and Chrome on an Android phone still fails (often with `
 the Android **Nearby devices** permission, which it needs to reach LAN addresses (Settings → Apps → Chrome →
 Permissions).
 
+### Frame rate problems
+
+To see which frame events a game sends (for example when frame generation seems to make no difference), start the
+game, get into gameplay with the settings to check, and run in an administrator PowerShell:
+
+```powershell
+.\tools\trace-frames.ps1               # records 10 seconds into frame-trace\ (ignored by git)
+python tools\analyze-frame-trace.py frame-trace\frames.xml
+```
+
+The script uses only Windows' `logman` and `tracerpt`. The summary (Python 3, standard library only) shows, second by
+second, the frames the game renders (NVIDIA Reflex markers), the frames it presents (SYSCOM's "Frame rate") and the
+flips that reach the screen. With frame generation working, presented is a multiple of rendered.
+
 ## Package
 
 ```powershell

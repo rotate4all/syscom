@@ -41,7 +41,8 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   left of it, centered above or below it, or hidden.
 - Native frame rate next to the shown one under frame generation: NVIDIA DLSS FG (via Reflex PC Latency Stats),
   Intel XeSS FG and AMD Fluid Motion Frames, from public trace events (no injection). The suggested FPS card shows
-  both.
+  both. `tools\trace-frames.ps1` and `tools\analyze-frame-trace.py` record and summarise a game's frame events when
+  the numbers look wrong.
 - Separate desktop and phone layouts per PC, each with its own cards, sensors and sections. Phones and the phone
   preview use the phone layout, which follows the desktop one until it is changed. Graphs keep their history when
   cards are rebuilt or the layout switches.
