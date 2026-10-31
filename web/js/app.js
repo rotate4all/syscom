@@ -1,6 +1,6 @@
 import { load, save, normalizeDevice, normalizeUrl, exportLayout, uid, MIN_INTERVAL } from './store.js';
 import { Connection } from './connection.js';
-import { createWidget, defaultsFor, suggest, COLORS } from './widgets.js';
+import { createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom } from './widgets.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const state = load();
@@ -35,7 +35,7 @@ function connectionFor(dev) {
   c = new Connection(dev);
   c.addEventListener('status', () => { renderMessage(dev); updateHeader(); });
   c.addEventListener('token', persist);
-  c.addEventListener('catalog', () => renderPage(dev));
+  c.addEventListener('catalog', () => { if (!refreshPage(dev)) renderPage(dev); c.subscribe(); });
   c.addEventListener('data', (e) => onData(dev, e.detail));
   conns.set(dev.key, c);
   return c;
@@ -47,7 +47,13 @@ function onData(dev, frame) {
   const conn = conns.get(dev.key);
   const visible = state.devices[active] === dev && document.visibilityState === 'visible';
   for (const w of dev.widgets) {
-    page.widgets.get(w.id)?.update(conn.value(frame, w.sensor), visible);
+    const inst = page.widgets.get(w.id);
+    if (!inst) continue;
+    const max = inst.maxFrom ? inst.maxFrom.reduce((sum, id) => {
+      const x = conn.value(frame, id);
+      return sum == null || x == null ? null : sum + x;
+    }, 0) : null;
+    inst.update(conn.value(frame, w.sensor), visible, max);
   }
 }
 
@@ -127,7 +133,10 @@ function renderPage(dev) {
   p.grid.replaceChildren();
 
   dev.widgets.forEach((w, i) => {
-    const inst = createWidget(w, conn.sensors.get(w.sensor), widgetTools(dev, w, i));
+    const sensor = conn.sensors.get(w.sensor);
+    const inst = createWidget(w, sensor, widgetTools(dev, w, i));
+    inst.maxFrom = effectiveMaxFrom(w, sensor, conn.catalog);
+    inst.signature = widgetSignature(w, conn);
     p.widgets.set(w.id, inst);
     p.grid.append(inst.el);
   });
@@ -137,7 +146,41 @@ function renderPage(dev) {
   add.textContent = '+ Add widget';
   add.onclick = () => openWidgetEditor(dev, null);
   p.grid.append(add);
+  if (dev.widgets.length) {
+    const reset = document.createElement('button');
+    reset.className = 'add-tile';
+    reset.textContent = '↺ Suggested layout';
+    reset.onclick = () => {
+      if (!conn.catalog.length || !confirm(`Replace the ${dev.name} dashboard with the suggested layout?`)) return;
+      dev.widgets = suggest(conn.catalog).map((w) => ({ ...w, id: uid() }));
+      persist(); renderPage(dev); conn.subscribe();
+    };
+    p.grid.append(reset);
+  }
   renderMessage(dev);
+}
+
+function widgetSignature(w, conn) {
+  const sensor = conn.sensors.get(w.sensor);
+  return `${sensor?.unit ?? '-'}|${(effectiveMaxFrom(w, sensor, conn.catalog) || []).join(',')}`;
+}
+
+/**
+ * A new catalog (reconnect, or the game shown by the frame counter changed) usually leaves every widget's sensor in
+ * place. Then only the names are updated, so readings and graph history stay on screen. Returns false when the
+ * page has to be rebuilt.
+ */
+function refreshPage(dev) {
+  const p = pages.get(dev.key);
+  const conn = conns.get(dev.key);
+  if (!p || !conn || p.widgets.size !== dev.widgets.length) return false;
+  for (const w of dev.widgets) {
+    const inst = p.widgets.get(w.id);
+    if (!inst || inst.signature !== widgetSignature(w, conn)) return false;
+  }
+  for (const w of dev.widgets) p.widgets.get(w.id).setSensor(conn.sensors.get(w.sensor));
+  renderMessage(dev);
+  return true;
 }
 
 function widgetTools(dev, w, i) {
@@ -261,10 +304,17 @@ addEventListener('resize', () => {
   host.scrollTo({ left: active * host.clientWidth });
 });
 
-// Pause streaming while the tab/phone screen is hidden: no traffic, no polling on the servers.
+// Streams keep running while the tab is in the background, so readings and graphs are current the moment you
+// look again (hidden pages just skip painting). Phones may still drop the connection while asleep; reconnect
+// right away instead of waiting for the backoff timer.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') conns.forEach((c) => c.stop());
-  else state.devices.forEach((d) => connectionFor(d).connect());
+  if (document.visibilityState !== 'visible') return;
+  state.devices.forEach((d) => {
+    const c = connectionFor(d);
+    if (c.status === 'offline' || c.status === 'idle') { c.retry = 0; c.connect(); }
+  });
+  const dev = state.devices[active];
+  if (dev) pages.get(dev.key)?.widgets.forEach((w) => w.refresh());
 });
 
 // ---------- edit mode
@@ -278,36 +328,107 @@ $('#btn-edit').onclick = () => {
 const dlgWidget = $('#dlg-widget');
 let editTarget = null;
 
+// Pills: which part of the PC, then which kind of reading. Keeps the sensor list short.
+const DEVICE_CATS = [
+  ['cpu', 'CPU', (s) => s.hardwareType === 'Cpu'],
+  ['gpu', 'GPU', (s) => s.hardwareType.startsWith('Gpu')],
+  ['game', 'Game', (s) => s.hardwareType === 'Game'],
+  ['mem', 'Memory', (s) => s.hardwareType === 'Memory'],
+  ['disk', 'Drives', (s) => s.hardwareType === 'Storage' || s.hardwareType === 'Drive'],
+  ['net', 'Network', (s) => s.hardwareType === 'Network'],
+  ['board', 'Motherboard', (s) => ['Motherboard', 'SuperIO', 'EmbeddedController', 'Cooler', 'Psu', 'Battery'].includes(s.hardwareType)],
+];
+const READING_CATS = [
+  ['temp', 'Temperature', ['Temperature']],
+  ['load', 'Load', ['Load', 'Level', 'Factor']],
+  ['clock', 'Clock', ['Clock', 'Frequency']],
+  ['power', 'Power', ['Power', 'Voltage', 'Current', 'Energy']],
+  ['data', 'Memory & space', ['Data', 'SmallData']],
+  ['fan', 'Fans', ['Fan', 'Control', 'Flow']],
+  ['rate', 'Data rate', ['Throughput']],
+  ['fps', 'Frames', ['Fps', 'Frametime']],
+];
+// Friendlier names for LibreHardwareMonitor's sensor types in the list.
+const TYPE_LABEL = { Data: 'Size', SmallData: 'Size', Throughput: 'Data rate', Fps: 'Frame rate', Frametime: 'Frame time', Control: 'Fan control' };
+const deviceCat = (s) => DEVICE_CATS.find(([, , test]) => test(s))?.[0] || 'other';
+const readingCat = (s) => READING_CATS.find(([, , types]) => types.includes(s.type))?.[0] || 'other';
+const pick = { dev: 'all', read: 'all' };
+let unitShown = null;   // the size unit the form's numbers are in
+
 function openWidgetEditor(dev, widget) {
   const conn = conns.get(dev.key);
   if (!conn?.catalog.length) { alert('Connect to this device first to see its sensors.'); return; }
   editTarget = { dev, widget };
   $('#widget-title').textContent = widget ? 'Edit widget' : 'Add widget';
   $('#w-search').value = '';
+  const current = widget && conn.sensors.get(widget.sensor);
+  if (current) { pick.dev = deviceCat(current); pick.read = readingCat(current); }
+  else { pick.dev = DEVICE_CATS.find(([, , test]) => conn.catalog.some(test))?.[0] || 'all'; pick.read = 'all'; }
   fillSensorList(conn.catalog, widget?.sensor);
-  const w = widget || defaultsFor(conn.catalog.find((s) => s.id === $('#w-sensor').value) || conn.catalog[0]);
-  fillWidgetForm(w);
+  const sensor = conn.sensors.get($('#w-sensor').value);
+  fillWidgetForm(widget || defaultsFor(sensor || conn.catalog[0], conn.catalog), sensor, conn.catalog);
   dlgWidget.showModal();
+}
+
+function renderPills(host, cats, current, counts, onPick) {
+  host.replaceChildren();
+  const all = [...counts.values()].reduce((a, b) => a + b, 0);
+  for (const [key, label] of [['all', 'All'], ...cats.map(([k, l]) => [k, l]), ['other', 'Other']]) {
+    const n = key === 'all' ? all : counts.get(key) || 0;
+    if (!n) continue;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = key === current ? 'active' : '';
+    b.setAttribute('aria-pressed', String(key === current));
+    b.innerHTML = `${escapeHtml(label)}<span class="n">${n}</span>`;
+    b.onclick = () => onPick(key);
+    host.append(b);
+  }
 }
 
 function fillSensorList(catalog, selectedId) {
   const sel = $('#w-sensor');
   const q = $('#w-search').value.trim().toLowerCase();
+  const searching = q.length > 0;
+
+  // Device pills count everything; reading pills count what's in the chosen device.
+  const devCounts = new Map();
+  for (const s of catalog) devCounts.set(deviceCat(s), (devCounts.get(deviceCat(s)) || 0) + 1);
+  if (pick.dev !== 'all' && !devCounts.get(pick.dev)) pick.dev = 'all';
+  const inDev = catalog.filter((s) => pick.dev === 'all' || deviceCat(s) === pick.dev);
+  const readCounts = new Map();
+  for (const s of inDev) readCounts.set(readingCat(s), (readCounts.get(readingCat(s)) || 0) + 1);
+  if (pick.read !== 'all' && !readCounts.get(pick.read)) pick.read = 'all';
+
+  const repick = () => {
+    $('#w-search').value = '';
+    fillSensorList(catalog, null);
+    onSensorPicked();
+  };
+  renderPills($('#w-dev'), DEVICE_CATS, pick.dev, devCounts, (k) => { pick.dev = k; pick.read = 'all'; repick(); });
+  renderPills($('#w-read'), READING_CATS, pick.read, readCounts, (k) => { pick.read = k; repick(); });
+  $('#w-dev').classList.toggle('searching', searching);
+  $('#w-read').classList.toggle('searching', searching);
+  $('#w-read').hidden = searching || readCounts.size < 2;
+
+  // Searching looks through every sensor; otherwise the pills decide.
+  const list = searching
+    ? catalog.filter((s) => q.split(/\s+/).every((part) => `${s.hardware} ${s.name} ${s.type}`.toLowerCase().includes(part)))
+    : inDev.filter((s) => pick.read === 'all' || readingCat(s) === pick.read);
+
   sel.replaceChildren();
   const groups = new Map();
-  for (const s of catalog) {
-    const text = `${s.hardware} ${s.name} ${s.type}`.toLowerCase();
-    if (q && !q.split(/\s+/).every((part) => text.includes(part))) continue;
+  for (const s of list) {
     if (!groups.has(s.hardware)) groups.set(s.hardware, []);
     groups.get(s.hardware).push(s);
   }
-  for (const [hw, list] of groups) {
+  for (const [hw, items] of groups) {
     const og = document.createElement('optgroup');
     og.label = hw;
-    for (const s of list) {
+    for (const s of items) {
       const o = document.createElement('option');
       o.value = s.id;
-      o.textContent = `${s.name} · ${s.type}${s.unit ? ` (${s.unit})` : ''}`;
+      o.textContent = `${s.name} · ${TYPE_LABEL[s.type] || s.type}${s.unit ? ` (${s.unit})` : ''}`;
       if (s.id === selectedId) o.selected = true;
       og.append(o);
     }
@@ -316,7 +437,7 @@ function fillSensorList(catalog, selectedId) {
   if (!sel.value && sel.options.length) sel.options[0].selected = true;
 }
 
-function fillWidgetForm(w) {
+function fillWidgetForm(w, sensor, catalog) {
   $('#w-type').value = w.type;
   $('#w-size').value = w.size || 'sm';
   $('#w-label').value = w.label || '';
@@ -329,35 +450,86 @@ function fillWidgetForm(w) {
     $(`#t${i}-v`).value = t.value ?? '';
     $(`#t${i}-c`).value = t.color || fallback[i];
   }
+
+  // GB / MB for memory and storage sizes. The form's numbers are in the unit shown.
+  const choices = unitChoices(sensor);
+  $('#w-unit-field').hidden = !choices;
+  unitShown = choices ? (w.unit && choices.includes(w.unit) ? w.unit : sensor.unit) : null;
+  if (choices) $('#w-unit').value = unitShown;
+
+  // "Scale max follows the total": live total VRAM / RAM / drive size instead of a fixed number.
+  const total = totalFor(sensor, catalog);
+  $('#w-total-field').hidden = !total;
+  $('#w-total').checked = !!total && !!effectiveMaxFrom(w, sensor, catalog);
+  $('#w-total-hint').textContent = total ? `(${total.map((id) => conns.get(editTarget.dev.key)?.sensors.get(id)?.name).join(' + ')})` : '';
+  syncTotal();
+}
+
+function syncTotal() {
+  const on = !$('#w-total-field').hidden && $('#w-total').checked;
+  $('#w-max').disabled = on;
+  $('#w-max').placeholder = on ? 'total' : 'auto';
+  if (on) $('#w-max').value = '';
+}
+
+function onSensorPicked() {
+  if (!editTarget) return;
+  const conn = conns.get(editTarget.dev.key);
+  const s = conn?.sensors.get($('#w-sensor').value);
+  if (!s) return;
+  // Adding: a different sensor brings its own defaults. Editing: keep the settings, refresh the sensor-specific bits.
+  if (!editTarget.widget) fillWidgetForm(defaultsFor(s, conn.catalog), s, conn.catalog);
+  else fillWidgetForm(readForm(editTarget.widget.id), s, conn.catalog);
 }
 
 $('#w-search').addEventListener('input', () => {
   const conn = conns.get(editTarget?.dev.key);
-  if (conn) fillSensorList(conn.catalog, $('#w-sensor').value);
+  if (!conn) return;
+  const before = $('#w-sensor').value;
+  fillSensorList(conn.catalog, before);
+  if ($('#w-sensor').value !== before) onSensorPicked();
 });
 
-// Picking a different sensor while adding refreshes the defaults (label, scale, thresholds).
-$('#w-sensor').addEventListener('change', () => {
-  if (editTarget?.widget) return;
-  const s = conns.get(editTarget.dev.key)?.sensors.get($('#w-sensor').value);
-  if (s) fillWidgetForm(defaultsFor(s));
+$('#w-sensor').addEventListener('change', onSensorPicked);
+$('#w-total').addEventListener('change', syncTotal);
+
+// Switching GB ↔ MB converts the numbers already in the form.
+$('#w-unit').addEventListener('change', () => {
+  const next = $('#w-unit').value;
+  const f = unitFactor(unitShown, next);
+  for (const id of ['#w-min', '#w-max', '#t0-v', '#t1-v', '#t2-v']) {
+    const v = $(id).value;
+    if (v !== '') $(id).value = String(+(Number(v) * f).toFixed(3));
+  }
+  $('#w-dec').value = next === 'MB' ? '0' : '1';
+  unitShown = next;
 });
 
-dlgWidget.addEventListener('close', () => {
-  if (dlgWidget.returnValue !== 'save' || !editTarget) return;
-  const { dev, widget } = editTarget;
-  const num = (id) => { const v = $(id).value; return v === '' ? null : Number(v); };
-  const next = {
-    id: widget?.id || uid(),
+function readForm(id) {
+  const num = (sel) => { const v = $(sel).value; return v === '' ? null : Number(v); };
+  const conn = conns.get(editTarget.dev.key);
+  const sensor = conn?.sensors.get($('#w-sensor').value);
+  const total = totalFor(sensor, conn?.catalog);
+  const useTotal = !!total && $('#w-total').checked;
+  return {
+    id,
     sensor: $('#w-sensor').value,
     type: $('#w-type').value,
     size: $('#w-size').value,
     label: $('#w-label').value.trim(),
     min: num('#w-min') ?? 0,
-    max: num('#w-max'),
+    max: useTotal ? null : num('#w-max'),
+    maxFrom: useTotal ? total : [],
+    unit: unitChoices(sensor) ? $('#w-unit').value : undefined,
     decimals: Number($('#w-dec').value),
     thresholds: [0, 1, 2].map((i) => ({ value: num(`#t${i}-v`), color: $(`#t${i}-c`).value })),
   };
+}
+
+dlgWidget.addEventListener('close', () => {
+  if (dlgWidget.returnValue !== 'save' || !editTarget) return;
+  const { dev, widget } = editTarget;
+  const next = readForm(widget?.id || uid());
   if (!next.sensor) return;
   if (widget) dev.widgets[dev.widgets.indexOf(widget)] = next;
   else dev.widgets.push(next);

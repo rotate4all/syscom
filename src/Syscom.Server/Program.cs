@@ -96,6 +96,12 @@ if (!useMock)
 #else
 useMock = true;
 #endif
+#if WINDOWS
+// FPS and frame time for any GPU, from Windows' graphics present events.
+if (!useMock)
+    builder.Services.AddSingleton<ISensorSource>(sp =>
+        new PresentMonitorSource(sp.GetRequiredService<ILoggerFactory>().CreateLogger("FrameRate")));
+#endif
 if (useMock) builder.Services.AddSingleton<ISensorSource, MockSensorSource>();
 
 builder.Services.AddSingleton<SensorHub>();

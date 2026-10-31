@@ -46,7 +46,11 @@ No data is sent until the client subscribes. Values are rounded to 2 decimals.
 
 Units by sensor type: Temperature `°C`, Load/Control/Level `%`, Clock `MHz`, Power `W`, Voltage `V`,
 Current `A`, Fan `RPM`, Data `GB`, SmallData `MB`, Throughput `B/s` (the dashboard scales to KB/s, MB/s),
-Fps `FPS`.
+Fps `FPS`, Frametime `ms`.
+
+Frame rate sensors (Windows): `/frames/fps`, `/frames/frametime` (average over the last second) and
+`/frames/frametime-worst` (longest frame in that second). Their `hardware` is the name of the app being measured,
+or `No game running`; the catalog is re-sent when it changes.
 
 ## Management API (tray app)
 

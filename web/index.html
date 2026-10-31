@@ -43,10 +43,13 @@
     <form method="dialog" class="sheet" id="widget-form">
       <h2 id="widget-title">Add widget</h2>
 
-      <label class="field">Sensor
-        <input type="search" id="w-search" placeholder="Filter sensors…" autocomplete="off">
-        <select id="w-sensor" size="7" required></select>
-      </label>
+      <div class="field">
+        <span>Sensor</span>
+        <div class="pills" id="w-dev" role="group" aria-label="Device"></div>
+        <div class="pills small" id="w-read" role="group" aria-label="Reading"></div>
+        <input type="search" id="w-search" placeholder="Search all sensors…" autocomplete="off" aria-label="Search sensors">
+        <select id="w-sensor" size="6" required aria-label="Sensor"></select>
+      </div>
 
       <div class="row">
         <label class="field">Display
@@ -73,7 +76,13 @@
         <label class="field">Decimals
           <select id="w-dec"><option>0</option><option>1</option><option>2</option></select>
         </label>
+        <label class="field" id="w-unit-field" hidden>Unit
+          <select id="w-unit"><option>GB</option><option>MB</option></select>
+        </label>
       </div>
+      <label class="check" id="w-total-field" hidden>
+        <input type="checkbox" id="w-total"> Scale max follows the total <span class="hint" id="w-total-hint"></span>
+      </label>
 
       <fieldset class="thresholds">
         <legend>Thresholds <small>colour applies from each value upward</small></legend>

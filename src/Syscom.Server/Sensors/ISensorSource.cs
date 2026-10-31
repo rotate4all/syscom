@@ -42,6 +42,7 @@ public static class Units
         "Energy" => "mWh",
         "Noise" => "dBA",
         "Fps" => "FPS",
+        "Frametime" => "ms",
         _ => "",
     };
 }

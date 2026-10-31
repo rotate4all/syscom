@@ -17,10 +17,14 @@ public sealed class MockSensorSource : ISensorSource
         ("/mock/gpu/temperature/0", "GPU Core", "Mock GPU 16GB", "GpuNvidia", "Temperature", 30, 88),
         ("/mock/gpu/clock/0", "GPU Core", "Mock GPU 16GB", "GpuNvidia", "Clock", 300, 2800),
         ("/mock/gpu/fan/0", "GPU Fan 1", "Mock GPU 16GB", "GpuNvidia", "Fan", 0, 3000),
-        ("/mock/gpu/smalldata/0", "GPU Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 500, 16000),
-        ("/mock/gpu/fps/0", "Frames per second", "Mock GPU 16GB", "GpuNvidia", "Fps", 20, 165),
+        ("/mock/gpu/smalldata/0", "GPU Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 500, 9000),
+        ("/mock/gpu/smalldata/1", "GPU Memory Total", "Mock GPU 16GB", "GpuNvidia", "SmallData", 16376, 16376),
+        ("/frames/fps", "Frame rate", "MockGame", "Game", "Fps", 50, 165),
+        ("/frames/frametime", "Frame time", "MockGame", "Game", "Frametime", 6, 20),
+        ("/frames/frametime-worst", "Frame time (worst)", "MockGame", "Game", "Frametime", 8, 40),
         ("/mock/ram/load/0", "Memory", "Mock Memory", "Memory", "Load", 20, 95),
-        ("/mock/ram/data/0", "Memory Used", "Mock Memory", "Memory", "Data", 4, 30),
+        ("/mock/ram/data/0", "Memory Used", "Mock Memory", "Memory", "Data", 4, 20),
+        ("/mock/ram/data/1", "Memory Available", "Mock Memory", "Memory", "Data", 12, 12),
         ("/mock/nvme/temperature/0", "Temperature", "Mock NVMe SSD", "Storage", "Temperature", 30, 70),
         ("/mock/nvme/load/1", "Total Activity", "Mock NVMe SSD", "Storage", "Load", 0, 100),
         ("/mock/net/throughput/0", "Download Speed", "Mock Ethernet", "Network", "Throughput", 0, 12_000_000),
@@ -43,6 +47,10 @@ public sealed class MockSensorSource : ISensorSource
             _state[d.Id] = cur;
             values[d.Id] = cur;
         }
+        // Keep related readings consistent: 32 GB of RAM, frame time matching the frame rate.
+        values["/mock/ram/data/1"] = 32 - values["/mock/ram/data/0"];
+        values["/frames/frametime"] = 1000 / values["/frames/fps"];
+        values["/frames/frametime-worst"] = Math.Max(values["/frames/frametime-worst"], values["/frames/frametime"] * 1.3f);
         var changed = _first;
         _first = false;
         return changed;

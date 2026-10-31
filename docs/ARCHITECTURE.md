@@ -29,6 +29,7 @@ Windows service, or as a console app for development.
 | `SensorHub` | `Sensors/SensorHub.cs` | One shared polling loop for all clients. It runs at the fastest interval any connected client asked for (never below `MinIntervalMs`, 500 by default) and **stops touching hardware when nobody is connected**. |
 | `LhmSensorSource` | `Sensors/LhmSensorSource.cs` | Wraps LibreHardwareMonitorLib: CPU, GPU, memory, motherboard, storage, network, battery, PSU. Sensor IDs are LHM's stable identifiers (e.g. `/amdcpu/0/temperature/2`). |
 | `DriveSpaceSource` | `Sensors/DriveSpaceSource.cs` | Free/used/total space per fixed drive via `DriveInfo` (no dependency). |
+| `PresentMonitorSource` | `Sensors/PresentMonitorSource.cs` | Frame rate and frame time for any GPU from Windows' present events (real-time ETW session on the DXGI and D3D9 providers, called directly, no dependency). Picks the app drawing the most frames, ignoring the compositor and shell. Runs only while someone is watching. |
 | `MockSensorSource` | `Sensors/MockSensorSource.cs` | Synthetic data for client development (`--mock`, default on non-Windows builds). |
 | `MetricsSession` | `Streaming/MetricsSession.cs` | One WebSocket client. Sends the sensor catalog, then compact value arrays for just the sensors the client's dashboard shows. |
 | `AuthService` | `Auth/AuthService.cs` | PBKDF2-SHA256 password hash, HMAC-SHA256 signed bearer tokens (30 days), per-IP lockout. Changing the password rotates the signing key, which signs out every browser. |
@@ -69,7 +70,10 @@ Plain ES modules, no framework and no build step. About 40 KB uncompressed.
 | `trust.html` | Phone setup page served at `/trust` |
 
 Swiping is native CSS scroll-snap, so there's no gesture library. Only the visible page repaints; hidden pages keep
-graph history. When the tab or phone screen is hidden, all streams close, so the servers go idle.
+graph history. Streams keep running while the tab is in the background (nothing is painted until it's visible
+again), so readings are current the moment you look. A new catalog only rebuilds the page when a widget's sensor
+appeared or disappeared; otherwise names update in place and graph history stays. Servers go idle once every
+browser has closed the dashboard.
 
 Each browser keeps its own layouts (localStorage is per origin). Open the dashboard from one "home" PC address,
 and add the other PCs from there.

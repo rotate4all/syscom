@@ -4,8 +4,57 @@ const HISTORY = 120;
 
 export const COLORS = { min: '#22c55e', med: '#f59e0b', max: '#ef4444' };
 
+/** Memory and storage sizes can be shown in GB or MB. */
+export function unitChoices(sensor) {
+  return sensor && (sensor.unit === 'GB' || sensor.unit === 'MB') ? ['GB', 'MB'] : null;
+}
+
+/** Multiplier from one size unit to another (GB ↔ MB); 1 for everything else. */
+export function unitFactor(from, to) {
+  if (from === 'GB' && to === 'MB') return 1024;
+  if (from === 'MB' && to === 'GB') return 1 / 1024;
+  return 1;
+}
+
+/** The unit a widget shows: its chosen size unit, else the sensor's own. */
+export function displayUnit(w, sensor) {
+  const native = sensor?.unit || '';
+  return unitChoices(sensor) && w.unit ? w.unit : native;
+}
+
+/**
+ * Sensors whose live sum is the natural scale maximum for a "used"/"free" reading on the same hardware:
+ * "GPU Memory Used" → ["GPU Memory Total"], "Memory Used" → ["Memory Used", "Memory Available"].
+ */
+export function totalFor(sensor, catalog = []) {
+  if (!sensor || !['Data', 'SmallData'].includes(sensor.type)) return null;
+  const siblings = catalog.filter((s) => s.hardware === sensor.hardware && s.unit === sensor.unit && s.id !== sensor.id);
+  const named = (n) => siblings.find((s) => s.name.toLowerCase() === n.toLowerCase());
+  const swap = (from, to) => sensor.name.replace(new RegExp(from, 'i'), to);
+  if (/used/i.test(sensor.name)) {
+    const total = named(swap('used', 'Total'));
+    if (total) return [total.id];
+    const free = named(swap('used', 'Free')) || named(swap('used', 'Available'));
+    if (free) return [sensor.id, free.id];
+  }
+  for (const word of ['free', 'available']) {
+    if (!new RegExp(word, 'i').test(sensor.name)) continue;
+    const total = named(swap(word, 'Total'));
+    if (total) return [total.id];
+    const used = named(swap(word, 'Used'));
+    if (used) return [sensor.id, used.id];
+  }
+  return null;
+}
+
+/** Live scale maximum sources for a widget: its own choice, or (for widgets made before this existed) the detected total. */
+export function effectiveMaxFrom(w, sensor, catalog) {
+  if (w.maxFrom !== undefined) return w.maxFrom?.length ? w.maxFrom : null;
+  return w.max == null ? totalFor(sensor, catalog) : null;
+}
+
 /** Sensible defaults when a sensor is picked for a new widget. */
-export function defaultsFor(sensor) {
+export function defaultsFor(sensor, catalog = []) {
   const t = sensor.type;
   const pct = ['Load', 'Control', 'Level', 'Humidity'].includes(t) || sensor.unit === '%';
   const w = {
@@ -15,7 +64,8 @@ export function defaultsFor(sensor) {
     size: 'sm',
     min: 0,
     max: pct || t === 'Temperature' ? 100 : null,
-    decimals: ['Voltage', 'Current'].includes(t) ? 2 : (t === 'Data' ? 1 : 0),
+    decimals: ['Voltage', 'Current'].includes(t) ? 2 : (t === 'Data' || t === 'Frametime' ? 1 : 0),
+    maxFrom: totalFor(sensor, catalog),
     thresholds: [
       { value: null, color: COLORS.min },
       { value: null, color: COLORS.med },
@@ -32,6 +82,9 @@ export function defaultsFor(sensor) {
       { value: 30, color: COLORS.med },
       { value: 60, color: COLORS.min },
     ];
+  } else if (t === 'Frametime') {
+    w.type = 'graph';
+    setT(w, 0, 20, 33);   // above 20 ms is under 50 FPS, above 33 ms under 30 FPS
   }
   return w;
 }
@@ -87,8 +140,9 @@ function readout(cls = 'readout') {
 }
 
 /**
- * Creates a widget card. Returns { el, update(value, visible), refresh(), destroy() }.
- * `sensor` may be undefined while the catalog is still loading or the hardware is gone.
+ * Creates a widget card. Returns { el, update(value, visible, max), setSensor(sensor), refresh(), destroy() }.
+ * `sensor` may be undefined while the catalog is still loading or the hardware is gone. `max` is the live scale
+ * maximum (e.g. total VRAM) in the sensor's own unit, when the widget has one.
  */
 export function createWidget(w, sensor, tools) {
   const card = el('div', 'card' + (w.size === 'lg' ? ' lg' : ''));
@@ -101,10 +155,13 @@ export function createWidget(w, sensor, tools) {
   head.append(label, hw);
   card.append(head);
 
-  const unit = sensor?.unit || '';
+  const unit = displayUnit(w, sensor);
+  const k = unitFactor(sensor?.unit, unit);
   const scaleMin = Number(w.min) || 0;
   let peak = 0;
-  const scaleMax = () => (w.max !== null && w.max !== '' && !isNaN(w.max) ? Number(w.max) : niceCeil(peak * 1.1));
+  let liveMax = null;
+  const scaleMax = () => (w.max !== null && w.max !== '' && w.max !== undefined && !isNaN(w.max) ? Number(w.max)
+    : liveMax > scaleMin ? liveMax : niceCeil(peak * 1.1));
   const frac = (v) => Math.max(0, Math.min(1, (v - scaleMin) / ((scaleMax() - scaleMin) || 1)));
   const thresholds = (w.thresholds || []).filter((t) => t.value !== null && t.value !== '' && !isNaN(t.value));
 
@@ -120,13 +177,19 @@ export function createWidget(w, sensor, tools) {
   let last = null;
   return {
     el: card,
-    update(v, visible) {
+    update(v, visible, max) {
+      if (v != null) v *= k;
+      if (max != null) liveMax = max * k;
       last = v;
       if (v != null && v > peak) peak = v;
       impl.push?.(v);
       if (visible) paint();
     },
     refresh() { paint(); },
+    setSensor(s) {
+      if (!w.label) label.textContent = s?.name || 'Sensor';
+      hw.textContent = s ? s.hardware : 'unavailable';
+    },
     destroy() { impl.destroy?.(); },
   };
 
@@ -299,8 +362,8 @@ export function suggest(catalog) {
   const out = [];
   const pick = (pred, overrides = {}) => {
     const s = catalog.find(pred);
-    if (s && !out.some((w) => w.sensor === s.id && w.type === (overrides.type || defaultsFor(s).type))) {
-      out.push({ ...defaultsFor(s), ...overrides });
+    if (s && !out.some((w) => w.sensor === s.id && w.type === (overrides.type || defaultsFor(s, catalog).type))) {
+      out.push({ ...defaultsFor(s, catalog), ...overrides });
     }
     return s;
   };
@@ -313,12 +376,14 @@ export function suggest(catalog) {
     || pick((s) => isCpu(s) && s.type === 'Temperature', { label: 'CPU temp' });
   pick((s) => isGpu(s) && s.type === 'Load' && named(/core/i)(s), { label: 'GPU load' });
   pick((s) => isGpu(s) && s.type === 'Temperature' && named(/core/i)(s), { label: 'GPU temp' });
-  pick((s) => s.type === 'Fps' || named(/fps/i)(s), { label: 'FPS' });
+  // Our own frame counter works on any GPU; AMD's driver FPS (via LibreHardwareMonitor) is the fallback.
+  pick((s) => s.id === '/frames/fps', { label: 'FPS' }) || pick((s) => s.type === 'Fps', { label: 'FPS' });
+  pick((s) => s.id === '/frames/frametime', { label: 'Frame time', size: 'lg' });
   pick((s) => isCpu(s) && s.type === 'Load' && named(/total/i)(s), { label: 'CPU history', type: 'graph', size: 'lg' });
   pick((s) => s.hardwareType === 'Memory' && s.type === 'Load', { label: 'RAM', type: 'bar' });
   pick((s) => isGpu(s) && named(/memory used/i)(s), { label: 'VRAM used', type: 'bar' });
   catalog.filter((s) => s.hardwareType === 'Drive' && s.id.endsWith('/used')).slice(0, 4)
-    .forEach((s) => out.push({ ...defaultsFor(s), label: `${s.hardware} used`, type: 'bar' }));
+    .forEach((s) => out.push({ ...defaultsFor(s, catalog), label: `${s.hardware} used`, type: 'bar' }));
   pick((s) => s.hardwareType === 'Network' && named(/download/i)(s), { label: 'Download', size: 'lg' });
   return out;
 }

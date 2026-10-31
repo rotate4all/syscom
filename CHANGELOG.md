@@ -17,5 +17,11 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   each PC's own name-constrained certificate authority and an auto-renewed server certificate, a phone setup page
   (`/trust`, iOS profile or certificate download with per-platform steps), and a QR code for it in the tray app
   (**Set up phone…**). A dashboard opened over HTTPS talks HTTPS to every PC.
+- Frame rate, frame time and worst frame time for any GPU, from Windows' graphics present events (no injection);
+  in the suggested layout.
+- Widget editor: device and reading category pills instead of one long sensor list; GB/MB choice for memory and
+  storage sizes; bars for VRAM, RAM and drive space scale to the live total.
+- The dashboard keeps streaming while its tab is in the background, and keeps readings and graph history across
+  reconnects.
 - Packaging: `build\package.ps1` (full package with bundled runtime and PawnIO, update assets, feed.json),
   `install.ps1` / `uninstall.ps1`, CI and release workflows.

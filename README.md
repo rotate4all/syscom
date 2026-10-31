@@ -56,7 +56,12 @@ component by component.
 | Motherboard | fan speeds, voltages, temperatures via Super I/O |
 | Network | upload/download speed, data transferred |
 | Other | battery, PSU (where supported) |
-| FPS | AMD GPUs today (driver-reported). All GPUs through Windows' own present events: [planned](#roadmap) |
+| Games | frame rate, frame time and worst frame time of the app drawing the most frames, on any GPU (see below) |
+
+Frame rate comes from SYSCOM's own counter on Windows' graphics present events (Microsoft-Windows-DXGI and -D3D9,
+the same events PresentMon and FrameView use). Nothing is injected into games, so it's safe with anti-cheat. It
+covers Direct3D 9 to 12, plus Vulkan/OpenGL games whose driver presents through DXGI. The widget shows which app
+it's measuring.
 
 Sensors come from [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor), the
 one hardware dependency. It covers what GPU-Z and MSI Afterburner report, without running either. Exactly what
@@ -157,8 +162,7 @@ and edit `web/` with no build step. See [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Roadmap
 
-- FPS for every GPU vendor from Windows' graphics kernel present events (the same source PresentMon and FrameView
-  use). No injection into games, so it's anti-cheat safe.
+- Frame rate for Vulkan/OpenGL games that don't present through DXGI (graphics kernel events).
 - Per-widget history length and min/max markers on graphs.
 
 ## Credits and license

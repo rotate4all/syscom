@@ -7,6 +7,8 @@
     <!-- Keep the footprint small: workstation GC, non-concurrent. -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <!-- The frame rate counter calls the Windows ETW API directly (no extra dependency). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <!-- LibreHardwareMonitorLib ships Windows-only, RID-specific assets, so it is only referenced for Windows

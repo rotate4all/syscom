@@ -1,4 +1,6 @@
 // One live connection to a SYSCOM server: login, WebSocket stream, reconnect with backoff.
+import { effectiveMaxFrom } from './widgets.js';
+
 const CLOSE_UNAUTHORIZED = 4401;
 
 export class Connection extends EventTarget {
@@ -97,7 +99,9 @@ export class Connection extends EventTarget {
   /** Ask only for the sensors this device's dashboard shows, at its polling interval. */
   subscribe() {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    const sensors = [...new Set(this.device.widgets.map((w) => w.sensor))];
+    // Each widget's sensor, plus the sensors that give it a live scale maximum (e.g. total VRAM).
+    const sensors = [...new Set(this.device.widgets.flatMap((w) =>
+      [w.sensor, ...(effectiveMaxFrom(w, this.sensors.get(w.sensor), this.catalog) || [])]))];
     this.ws.send(JSON.stringify({ type: 'subscribe', interval: this.device.interval, sensors }));
   }
 

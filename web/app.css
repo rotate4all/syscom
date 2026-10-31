@@ -87,7 +87,9 @@ button.icon[aria-pressed="true"] { background: var(--accent); border-color: var(
   flex: 0 0 100%; scroll-snap-align: start; scroll-snap-stop: always;
   overflow-y: auto; padding: 4px 16px 24px;
 }
-.page.stale .grid { opacity: .45; }
+.page .grid { transition: opacity .3s; }
+/* Only dim after a few seconds offline, so a quick reconnect (phone waking up) doesn't flash the dashboard. */
+.page.stale .grid { opacity: .45; transition-delay: 4s; }
 
 .grid {
   display: grid; gap: 12px;
@@ -184,6 +186,18 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .field { display: grid; gap: 6px; font-size: 13px; color: var(--muted); min-width: 0; }
 .field input, .field select { color: var(--text); font-size: 15px; }
 #w-sensor { height: auto; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pills button {
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 999px;
+  padding: 5px 12px; font-size: 13px; cursor: pointer; line-height: 1.2;
+}
+.pills button .n { opacity: .6; font-size: 11px; margin-left: 4px; }
+.pills button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pills.small button { padding: 3px 10px; font-size: 12px; }
+.pills.searching button.active { background: var(--surface-2); border-color: var(--line); color: var(--text); }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.check input { width: auto; }
+.check .hint { margin: 0; }
 .row { display: flex; gap: 10px; }
 .row > * { flex: 1; }
 .buttons { display: flex; justify-content: flex-end; gap: 8px; }
