@@ -26,6 +26,9 @@
       <h1 id="device-name">SYSCOM</h1>
     </div>
     <div class="actions">
+      <button id="btn-preview" class="icon" title="Phone preview: lay the dashboard out as a phone shows it" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>
+      </button>
       <button id="btn-edit" class="icon" title="Edit dashboard" aria-pressed="false">
         <svg viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>
       </button>
@@ -59,17 +62,24 @@
         <label class="field">Display
           <select id="w-type">
             <option value="gauge">Gauge</option>
-            <option value="bar">Bar</option>
+            <option value="bar">Bar, horizontal</option>
+            <option value="vbar">Bar, vertical</option>
             <option value="graph">Graph</option>
             <option value="value">Value</option>
           </select>
         </label>
-        <label class="field">Size
-          <select id="w-size">
-            <option value="sm">Normal</option>
-            <option value="lg">Wide</option>
-          </select>
+        <label class="field" id="w-style-field">Style
+          <select id="w-style"></select>
         </label>
+        <label class="field" id="w-pos-field">Value position
+          <select id="w-pos"></select>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="field">Width <input id="w-w" type="number" min="1" max="16" step="1" required></label>
+        <label class="field">Height <input id="w-h" type="number" min="1" max="12" step="1" required></label>
+        <p class="hint field-hint">In grid cells. A phone is 4 cells wide. You can also drag a card's corner in edit mode.</p>
       </div>
 
       <label class="field">Label <input id="w-label" maxlength="40"></label>
@@ -145,8 +155,34 @@
           <button id="btn-export" class="ghost">Export layout</button>
           <label class="ghost button">Import<input id="import-file" type="file" accept="application/json" hidden></label>
         </div>
-        <p class="hint">Layouts are saved in this browser. Passwords and sign-ins are not exported.</p>
+        <p class="hint">Each PC keeps its own dashboard, so every browser and phone that signs in sees the same layout. The device list and theme are saved in this browser. Passwords and sign-ins are not exported.</p>
       </section>
+    </div>
+  </dialog>
+
+  <!-- Sensor history -->
+  <dialog id="dlg-history" class="wide">
+    <div class="sheet">
+      <div class="sheet-head">
+        <div class="h-title">
+          <h2 id="h-title">History</h2>
+          <span class="sub" id="h-sub"></span>
+        </div>
+        <button class="icon" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="range">
+        <label for="h-range" id="h-range-label">Last 24 hours</label>
+        <input type="range" id="h-range" min="0" max="4" step="1" value="0" aria-describedby="h-range-label">
+        <div class="range-ticks" id="h-ticks">
+          <button type="button" data-i="0">1d</button><button type="button" data-i="1">3d</button><button type="button" data-i="2">7d</button><button type="button" data-i="3">14d</button><button type="button" data-i="4">30d</button>
+        </div>
+      </div>
+      <div class="h-stats" id="h-stats"></div>
+      <div class="h-chart">
+        <canvas id="h-canvas" role="img" aria-label="History chart"></canvas>
+        <div class="h-tip" id="h-tip" hidden></div>
+        <p class="h-empty" id="h-empty" hidden></p>
+      </div>
     </div>
   </dialog>
 

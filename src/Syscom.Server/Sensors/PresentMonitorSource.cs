@@ -12,8 +12,8 @@ namespace Syscom.Server.Sensors;
 /// it is safe with anti-cheat. No extra dependency: the ETW API is called directly. Needs administrator rights,
 /// which the SYSCOM service has.
 ///
-/// Covers Direct3D 9 to 12 games, and Vulkan/OpenGL games whose driver presents through DXGI. The session only runs
-/// while someone is watching (the hub only polls with clients connected) and stops 30 s after the last poll.
+/// Covers Direct3D 9 to 12 games, and Vulkan/OpenGL games whose driver presents through DXGI. The session runs while
+/// the hub polls (always while history is on, else only with clients connected) and stops 30 s after the last poll.
 /// </summary>
 public sealed unsafe class PresentMonitorSource : ISensorSource
 {

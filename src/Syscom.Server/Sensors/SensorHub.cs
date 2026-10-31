@@ -7,8 +7,9 @@ namespace Syscom.Server.Sensors;
 public sealed record Snapshot(long Timestamp, IReadOnlyDictionary<string, float> Values);
 
 /// <summary>
-/// Polls all sensor sources on one shared loop. The loop runs at the fastest interval any connected
-/// client asked for, and goes idle (no hardware access at all) when nobody is connected.
+/// Polls all sensor sources on one shared loop. The loop runs at the fastest interval any connected client asked
+/// for. With nobody connected it keeps sampling slowly for the history (HistorySampleMs), or goes idle (no hardware
+/// access at all) when history is turned off.
 /// </summary>
 public sealed class SensorHub : BackgroundService
 {
@@ -38,6 +39,9 @@ public sealed class SensorHub : BackgroundService
 
     public int Clients => _subscribers.Count;
 
+    /// <summary>Raised on the polling thread after every poll.</summary>
+    public event Action<Snapshot>? Polled;
+
     /// <summary>Last error of a sensor source, or null when it is healthy.</summary>
     public string? SourceError(string sourceName) => _errors.TryGetValue(sourceName, out var e) ? e : null;
 
@@ -56,14 +60,16 @@ public sealed class SensorHub : BackgroundService
     {
         while (!ct.IsCancellationRequested)
         {
-            if (_subscribers.IsEmpty)
+            if (_subscribers.IsEmpty && !_cfg.HistoryEnabled)
             {
                 try { await _wake.WaitAsync(ct); } catch (OperationCanceledException) { break; }
                 Drain();
                 continue;
             }
 
-            var interval = _subscribers.Values.DefaultIfEmpty(1000).Min();
+            var interval = _subscribers.IsEmpty
+                ? Math.Max(_cfg.MinIntervalMs, _cfg.HistorySampleMs)
+                : _subscribers.Values.Min();
             var sw = Stopwatch.StartNew();
             Poll();
             var wait = interval - (int)sw.ElapsedMilliseconds;
@@ -105,6 +111,8 @@ public sealed class SensorHub : BackgroundService
             Interlocked.Increment(ref _catalogVersion);
         }
         _latest = new Snapshot(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), values);
+        try { Polled?.Invoke(_latest); }
+        catch (Exception ex) { _log.LogWarning(ex, "History could not take a reading"); }
     }
 
     public override void Dispose()

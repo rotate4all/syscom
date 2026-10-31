@@ -21,6 +21,15 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   in the suggested layout.
 - Widget editor: device tabs with reading filters nested under the chosen tab, instead of one long sensor list;
   GB/MB choice for memory and storage sizes; bars for VRAM, RAM and drive space scale to the live total.
+- Dashboard layout: cards on a grid of columns and rows (4 columns on a phone), resizable by dragging a corner, with
+  content that scales to the card; drag and drop reordering in edit mode; sections (titled groups that can be moved,
+  renamed and folded away); a device icon on every card; phone preview on wide screens.
+- More ways to show a reading: five gauge styles (arc, semicircle, ring, needle, segments), horizontal and vertical
+  bars, and a choice of where the value sits (gauge: top, center, bottom; bars: above, below, beside or inside).
+- Each PC stores its own dashboard (`/api/dashboard`), so every browser and phone sees the layout prepared for it;
+  changes reach open dashboards right away.
+- History: every sensor is recorded for 30 days (`/api/history`); tapping a card opens a chart with a 1, 3, 7, 14 or
+  30 day slider, the average line, the lowest-to-highest band and the range's lowest, average and highest readings.
 - The dashboard keeps streaming while its tab is in the background, and keeps readings and graph history across
   reconnects.
 - Packaging: `build\package.ps1` (full package with bundled runtime and PawnIO, update assets, feed.json),

@@ -8,7 +8,7 @@ SYSCOM is a server-only system. Every monitored PC runs the same server; browser
 │ web dashboard (web/)      │◀────────────────────▶ │ syscom.exe  (Windows service "SYSCOM")       │
 │  • one page per PC        │  :47810 / :47812 TLS  │  ├─ SensorHub ── LibreHardwareMonitorLib ─┐  │
 │  • swipe between PCs      │                       │  │             └─ DriveSpaceSource (.NET) │  │
-│  • layouts in localStorage│                       │  ├─ Auth (password → signed token)        │  │
+│  • PC list in localStorage│                       │  ├─ Auth (password → signed token)        │  │
 │  • installable (PWA)      │                       │  ├─ TlsManager (own CA, HTTPS certificate) │  │
 └───────────────────────────┘                       │  ├─ LanDiscovery (UDP :47811 broadcast)    │  │
                                                     │  ├─ ComponentManager (health, updates)     │  │
@@ -26,10 +26,12 @@ Windows service, or as a console app for development.
 
 | Piece | File | Role |
 | --- | --- | --- |
-| `SensorHub` | `Sensors/SensorHub.cs` | One shared polling loop for all clients. It runs at the fastest interval any connected client asked for (never below `MinIntervalMs`, 500 by default) and **stops touching hardware when nobody is connected**. |
+| `SensorHub` | `Sensors/SensorHub.cs` | One shared polling loop for all clients. It runs at the fastest interval any connected client asked for (never below `MinIntervalMs`, 500 by default). With nobody connected it samples every `HistorySampleMs` (2 s) for the history, or **stops touching hardware** when `HistoryEnabled` is off. |
+| `HistoryStore` | `History/HistoryStore.cs` | 30 days of every sensor: readings averaged into 1-minute buckets (kept 3 days) and 10-minute buckets (kept 31 days), with each bucket's lowest and highest reading. A closed bucket is one fixed-size record appended to the file for its tier and day, so writing is one sequential append a minute and reading a sensor is a seek per record. About 75 MB for 600 sensors. Queries return at most 1500 evenly spaced points. |
+| `DashboardStore` | `Dashboards/DashboardStore.cs` | This PC's dashboard layout (`dashboard.json`), shared by every browser that signs in. Each save bumps a revision; open WebSockets are told (`layout` message) and reload it. |
 | `LhmSensorSource` | `Sensors/LhmSensorSource.cs` | Wraps LibreHardwareMonitorLib: CPU, GPU, memory, motherboard, storage, network, battery, PSU. Sensor IDs are LHM's stable identifiers (e.g. `/amdcpu/0/temperature/2`). |
 | `DriveSpaceSource` | `Sensors/DriveSpaceSource.cs` | Free/used/total space per fixed drive via `DriveInfo` (no dependency). |
-| `PresentMonitorSource` | `Sensors/PresentMonitorSource.cs` | Frame rate and frame time for any GPU from Windows' present events (real-time ETW session on the DXGI and D3D9 providers, called directly, no dependency). Picks the app drawing the most frames, ignoring the compositor and shell. Runs only while someone is watching. |
+| `PresentMonitorSource` | `Sensors/PresentMonitorSource.cs` | Frame rate and frame time for any GPU from Windows' present events (real-time ETW session on the DXGI and D3D9 providers, called directly, no dependency). Picks the app drawing the most frames, ignoring the compositor and shell. Runs while the hub polls (always while history is on). |
 | `MockSensorSource` | `Sensors/MockSensorSource.cs` | Synthetic data for client development (`--mock`, default on non-Windows builds). |
 | `MetricsSession` | `Streaming/MetricsSession.cs` | One WebSocket client. Sends the sensor catalog, then compact value arrays for just the sensors the client's dashboard shows. |
 | `AuthService` | `Auth/AuthService.cs` | PBKDF2-SHA256 password hash, HMAC-SHA256 signed bearer tokens (30 days), per-IP lockout. Changing the password rotates the signing key, which signs out every browser. |
@@ -62,10 +64,12 @@ Plain ES modules, no framework and no build step. About 40 KB uncompressed.
 
 | File | Role |
 | --- | --- |
-| `js/app.js` | Pages (one per PC), swipe tracking, edit mode, dialogs, settings |
-| `js/connection.js` | Login, WebSocket stream, reconnect with backoff, `4401` close code means "sign in again" |
-| `js/widgets.js` | Gauge (SVG), bar (CSS), graph (canvas), value; threshold colouring; suggested layout |
-| `js/store.js` | Devices, dashboards and theme in `localStorage`; export/import |
+| `js/app.js` | Pages (one per PC) with sections, swipe tracking, edit mode, phone preview, layout sync with the PC, dialogs, settings, history dialog |
+| `js/connection.js` | Login, WebSocket stream, reconnect with backoff, `4401` close code means "sign in again"; dashboard and history API calls |
+| `js/widgets.js` | Cards: gauges (SVG, five styles), horizontal and vertical bars (CSS), graph (canvas), value; device icons; value positions; threshold colouring; suggested layout |
+| `js/dnd.js` | Edit mode drag and drop (cards and whole sections) and corner resizing, with pointer events (mouse, pen and touch) |
+| `js/history.js` | History chart (canvas): average line, lowest-to-highest band, thresholds, crosshair tooltip |
+| `js/store.js` | Device list, theme and a cache of each PC's dashboard in `localStorage`; export/import |
 | `sw.js`, `manifest.webmanifest` | App shell cache and install metadata (PWA) |
 | `trust.html` | Phone setup page served at `/trust` |
 
@@ -75,8 +79,20 @@ again), so readings are current the moment you look. A new catalog only rebuilds
 appeared or disappeared; otherwise names update in place and graph history stays. Servers go idle once every
 browser has closed the dashboard.
 
-Each browser keeps its own layouts (localStorage is per origin). Open the dashboard from one "home" PC address,
-and add the other PCs from there.
+### Grid and sizes
+
+Cards sit on a grid of fixed-height rows (56 px) and columns about 90 px wide: 4 on a phone, more on wider screens (up
+to 16). A card's size is a number of columns and rows, so a layout keeps its shape from phone to desktop; a card never
+spans more columns than the screen has. Everything inside a card is sized in container query units, so it scales
+with the card. Sections are separate grids, so cards never flow from one section into another.
+
+### Where the dashboard lives
+
+Each PC's layout is saved on that PC (`PUT /api/dashboard`) and cached in the browser, so it shows instantly and
+works offline. Edits made while the PC is unreachable are kept and sent on the next connection; otherwise the PC's
+copy wins. The first browser to connect to a PC without a saved layout uploads its own. The list of PCs and the
+theme stay per browser (localStorage is per origin): open the dashboard from one "home" PC address, and add the
+other PCs from there.
 
 ## Tray app (`src/Syscom.Tray`)
 

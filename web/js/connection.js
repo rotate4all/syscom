@@ -58,6 +58,30 @@ export class Connection extends EventTarget {
     return r.ok ? r.json() : [];
   }
 
+  /** Signed-in API call; a rejected token means signing in again. */
+  async api(path, options = {}) {
+    if (!this.device.token) throw new Error('Not signed in.');
+    const r = await fetch(this.base + path, {
+      cache: 'no-store',
+      ...options,
+      headers: { authorization: 'Bearer ' + this.device.token, ...(options.body ? { 'content-type': 'application/json' } : {}) },
+    });
+    if (r.status === 401) { this.logout(); throw new Error('Signed out.'); }
+    if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+    return r.json();
+  }
+
+  /** This PC's dashboard: { rev, widgets } (rev 0 = none saved yet). */
+  loadDashboard() { return this.api('/api/dashboard'); }
+
+  /** Saves the dashboard on the PC; resolves to its new revision. */
+  async saveDashboard(widgets) {
+    return (await this.api('/api/dashboard', { method: 'PUT', body: JSON.stringify({ widgets }) })).rev;
+  }
+
+  /** One sensor's history: { step, start, avg[], min[], max[], enabled }. */
+  history(sensor, days) { return this.api(`/api/history?sensor=${encodeURIComponent(sensor)}&days=${days}`); }
+
   connect() {
     this.stop();
     if (!this.device.token) { this.setStatus('auth'); return; }
@@ -100,7 +124,7 @@ export class Connection extends EventTarget {
   subscribe() {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
     // Each widget's sensor, plus the sensors that give it a live scale maximum (e.g. total VRAM).
-    const sensors = [...new Set(this.device.widgets.flatMap((w) =>
+    const sensors = [...new Set(this.device.widgets.filter((w) => w.sensor).flatMap((w) =>
       [w.sensor, ...(effectiveMaxFrom(w, this.sensors.get(w.sensor), this.catalog) || [])]))];
     this.ws.send(JSON.stringify({ type: 'subscribe', interval: this.device.interval, sensors }));
   }
@@ -119,6 +143,9 @@ export class Connection extends EventTarget {
         break;
       case 'data':
         this.emit('data', { t: m.t, v: m.v });
+        break;
+      case 'layout':
+        this.emit('layout', { rev: m.rev });
         break;
     }
   }

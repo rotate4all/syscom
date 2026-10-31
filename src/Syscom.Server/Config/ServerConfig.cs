@@ -16,6 +16,13 @@ public sealed class ServerConfig
     public bool DiscoveryEnabled { get; set; } = true;
     public int DiscoveryPort { get; set; } = 47811;
 
+    /// <summary>Record every sensor for 30 days (shown when a dashboard card is tapped). Keeps sensors polled slowly
+    /// while no browser is connected.</summary>
+    public bool HistoryEnabled { get; set; } = true;
+
+    /// <summary>How often sensors are read for the history while no browser is connected, in milliseconds.</summary>
+    public int HistorySampleMs { get; set; } = 2000;
+
     /// <summary>Lowest polling interval a client may request, in milliseconds.</summary>
     public int MinIntervalMs { get; set; } = 500;
     public int TokenLifetimeDays { get; set; } = 30;

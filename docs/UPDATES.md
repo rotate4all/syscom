@@ -102,6 +102,8 @@ zips somewhere reachable and point `UpdateFeedUrl` at it.
 | `MinPawnIoVersion` | `2.2.0` | older PawnIO is flagged as a security error |
 | `PawnIoInstallArgs` | `-install -silent` | arguments for the PawnIO setup |
 | `MinIntervalMs` | `500` | fastest polling a browser may request |
+| `HistoryEnabled` | `true` | record every sensor for 30 days (`history\` next to `config.json`); keeps sensors polled while nobody watches |
+| `HistorySampleMs` | `2000` | how often sensors are read for the history while nobody watches |
 | `Port` / `DiscoveryPort` | `47810` / `47811` | |
 | `HttpsEnabled` / `HttpsPort` | `true` / `47812` | HTTPS with this PC's own certificate (needed to install the phone app) |
 | `DiscoveryEnabled` | `true` | LAN broadcasts |

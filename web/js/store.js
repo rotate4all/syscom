@@ -1,4 +1,7 @@
-// Layout and device list, persisted per browser in localStorage.
+// Device list and this browser's preferences, in localStorage. Each PC's dashboard is saved on that PC (and cached
+// here so it shows instantly and works offline).
+import { normalizeItem } from './widgets.js';
+
 const KEY = 'syscom.v1';
 
 export const DEFAULT_INTERVAL = 1000;
@@ -10,6 +13,8 @@ export function load() {
   return {
     theme: saved.theme || 'auto',
     active: saved.active || 0,
+    preview: !!saved.preview,
+    collapsed: saved.collapsed && typeof saved.collapsed === 'object' ? saved.collapsed : {},
     devices: Array.isArray(saved.devices) ? saved.devices.map(normalizeDevice) : [],
   };
 }
@@ -27,14 +32,20 @@ export function normalizeDevice(d) {
     name: d.name || d.url,
     token: d.token || null,
     interval: Math.max(MIN_INTERVAL, Number(d.interval) || DEFAULT_INTERVAL),
-    widgets: Array.isArray(d.widgets) ? d.widgets : [],
+    widgets: normalizeItems(d.widgets),
+    layoutRev: Number(d.layoutRev) || 0,      // revision of the PC's copy this layout matches
+    layoutDirty: !!d.layoutDirty,             // changed here but not yet saved on the PC
   };
+}
+
+export function normalizeItems(items) {
+  return (Array.isArray(items) ? items : []).map(normalizeItem).filter(Boolean).map((x) => (x.id ? x : { ...x, id: uid() }));
 }
 
 export function exportLayout(state) {
   return JSON.stringify({
     app: 'syscom', version: 1, theme: state.theme,
-    devices: state.devices.map(({ token, key, ...rest }) => rest),
+    devices: state.devices.map(({ token, key, layoutRev, layoutDirty, ...rest }) => rest),
   }, null, 2);
 }
 

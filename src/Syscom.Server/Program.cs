@@ -2,7 +2,9 @@ using Syscom.Server.Admin;
 using Syscom.Server.Auth;
 using Syscom.Server.Components;
 using Syscom.Server.Config;
+using Syscom.Server.Dashboards;
 using Syscom.Server.Discovery;
+using Syscom.Server.History;
 using Syscom.Server.Sensors;
 using Syscom.Server.Streaming;
 using Syscom.Server.Tls;
@@ -121,6 +123,11 @@ if (useMock) builder.Services.AddSingleton<ISensorSource, MockSensorSource>();
 
 builder.Services.AddSingleton<SensorHub>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SensorHub>());
+
+// History and the dashboard layout live next to config.json (so a --config test instance keeps its own).
+var dataDir = Path.GetDirectoryName(Path.GetFullPath(cfg.FilePath))!;
+builder.Services.AddSingleton(sp => new HistoryStore(dataDir, sp.GetRequiredService<ILoggerFactory>().CreateLogger("History")));
+builder.Services.AddSingleton(sp => new DashboardStore(dataDir, sp.GetRequiredService<ILogger<DashboardStore>>()));
 builder.Services.AddSingleton<LanDiscovery>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LanDiscovery>());
 
@@ -144,6 +151,9 @@ var hub = app.Services.GetRequiredService<SensorHub>();
 var discovery = app.Services.GetRequiredService<LanDiscovery>();
 var components = app.Services.GetRequiredService<ComponentManager>();
 var admin = app.Services.GetRequiredService<AdminAccess>();
+var history = app.Services.GetRequiredService<HistoryStore>();
+var dashboards = app.Services.GetRequiredService<DashboardStore>();
+if (cfg.HistoryEnabled) hub.Polled += history.Add;
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
 bool Authorized(HttpContext ctx)
@@ -186,6 +196,41 @@ api.MapPost("/login", (HttpContext ctx, LoginRequest body) =>
 api.MapGet("/sensors", (HttpContext ctx) =>
     Authorized(ctx) ? Results.Ok(hub.Catalog) : Results.Unauthorized());
 
+// One sensor's history: ?sensor=<id>&days=1..30 → evenly spaced points (avg, min, max); null = no data.
+api.MapGet("/history", (HttpContext ctx, string? sensor, int? days) =>
+{
+    if (!Authorized(ctx)) return Results.Unauthorized();
+    if (string.IsNullOrEmpty(sensor)) return Results.BadRequest(new { message = "sensor is required" });
+    var series = history.Query(sensor, days ?? 1);
+    static IEnumerable<double?> Clean(float[] a) => a.Select(v => float.IsNaN(v) ? (double?)null : Math.Round(v, 3));
+    return Results.Ok(new
+    {
+        sensor,
+        enabled = cfg.HistoryEnabled,
+        step = series.Step,
+        start = series.Start,
+        avg = Clean(series.Avg),
+        min = Clean(series.Min),
+        max = Clean(series.Max),
+    });
+});
+
+// This PC's dashboard layout, shared by every browser that signs in.
+api.MapGet("/dashboard", (HttpContext ctx) => Authorized(ctx) ? Results.Ok(dashboards.Get()) : Results.Unauthorized());
+api.MapPut("/dashboard", async (HttpContext ctx) =>
+{
+    if (!Authorized(ctx)) return Results.Unauthorized();
+    if (ctx.Request.ContentLength > DashboardStore.MaxBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    System.Text.Json.JsonDocument doc;
+    try { doc = await System.Text.Json.JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted); }
+    catch (System.Text.Json.JsonException) { return Results.BadRequest(new { message = "Not JSON." }); }
+    using (doc)
+    {
+        var (rev, error) = dashboards.Save(doc.RootElement);
+        return rev is null ? Results.BadRequest(new { message = error }) : Results.Ok(new { rev });
+    }
+});
+
 api.MapGet("/peers", (HttpContext ctx) =>
     Authorized(ctx)
         ? Results.Ok(discovery.Peers.Select(p => new { p.Id, p.Name, p.Url, p.HttpsUrl }))
@@ -207,7 +252,7 @@ app.Map("/ws", async (HttpContext ctx) =>
         await ws.CloseAsync((System.Net.WebSockets.WebSocketCloseStatus)MetricsSession.CloseUnauthorized, "unauthorized", ctx.RequestAborted);
         return;
     }
-    await new MetricsSession(ws, hub).RunAsync(ctx.RequestAborted);
+    await new MetricsSession(ws, hub, dashboards).RunAsync(ctx.RequestAborted);
 });
 
 // ---- certificate for phones (public: it's a CA certificate, no secrets)

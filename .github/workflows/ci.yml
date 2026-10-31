@@ -50,6 +50,16 @@ jobs:
           curl -sf localhost:47810/api/info
           curl -sf localhost:47810/ | grep -q "<title>SYSCOM</title>"
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/sensors)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/dashboard)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' 'localhost:47810/api/history?sensor=x')" = "401"
+          # Signed in: save and read back a dashboard, read a sensor's history
+          PW=$(cat "$HOME/.config/SYSCOM/initial-password.txt")
+          TOKEN=$(curl -sf localhost:47810/api/login -H 'content-type: application/json' -d "{\"password\":\"$PW\"}" | jq -r .token)
+          curl -sf -X PUT localhost:47810/api/dashboard -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            -d '{"widgets":[{"id":"s1","kind":"section","title":"CPU"},{"id":"w1","sensor":"/mock/cpu/load/0","type":"gauge","w":2,"h":3}]}' | jq -e '.rev == 1'
+          curl -sf localhost:47810/api/dashboard -H "authorization: Bearer $TOKEN" | jq -e '.widgets | length == 2'
+          sleep 3
+          curl -sf 'localhost:47810/api/history?sensor=/mock/cpu/load/0&days=1' -H "authorization: Bearer $TOKEN" | jq -e '.step == 60 and (.avg | length) == 1440 and (.avg[-1] != null or .avg[-2] != null)'
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/admin/components)" = "403"
           curl -sf localhost:47810/trust | grep -q "Install SYSCOM as an app"
           # HTTPS with the server's own CA (name-constrained to local names and private addresses)

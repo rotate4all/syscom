@@ -1,20 +1,27 @@
-import { load, save, normalizeDevice, normalizeUrl, exportLayout, uid, MIN_INTERVAL } from './store.js';
+import { load, save, normalizeDevice, normalizeItems, normalizeUrl, exportLayout, uid, MIN_INTERVAL } from './store.js';
 import { Connection } from './connection.js';
-import { createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom } from './widgets.js';
+import {
+  createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom, displayUnit,
+  isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format,
+} from './widgets.js';
+import { enableDnd } from './dnd.js';
+import { HistoryChart } from './history.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const state = load();
 const conns = new Map();   // device.key → Connection
-const pages = new Map();   // device.key → { section, grid, msg, widgets: Map(widgetId → instance) }
+const pages = new Map();   // device.key → { section, board, msg, widgets: Map(widgetId → instance) }
 let active = 0;
 let editing = false;
 
 const ICON = {
-  left: '<svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>',
-  right: '<svg viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>',
+  grip: '<svg viewBox="0 0 24 24"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke-width="3.2"/></svg>',
   edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-4-4L4 16v4Z"/></svg>',
   del: '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/></svg>',
+  resize: '<svg viewBox="0 0 24 24"><path d="M20 11v9h-9M20 20 12 12"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
 };
+const ROW_LIMIT = MAX_H;
 
 const persist = () => save({ ...state, active });
 
@@ -26,6 +33,7 @@ function applyTheme() {
   const dark = state.theme === 'dark' || (state.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
   $('meta[name="theme-color"]').content = dark ? '#0e1116' : '#f4f6f9';
   pages.forEach((p) => p.widgets.forEach((w) => w.refresh()));
+  if (dlgHistory.open) chart.draw();
 }
 
 // ---------- devices & connections
@@ -37,6 +45,7 @@ function connectionFor(dev) {
   c.addEventListener('token', persist);
   c.addEventListener('catalog', () => { if (!refreshPage(dev)) renderPage(dev); c.subscribe(); });
   c.addEventListener('data', (e) => onData(dev, e.detail));
+  c.addEventListener('layout', (e) => syncLayout(dev, e.detail.rev));
   conns.set(dev.key, c);
   return c;
 }
@@ -88,12 +97,61 @@ function removeDevice(dev) {
   renderPages();
 }
 
+// ---------- dashboard layout: saved on each PC, cached in this browser
+
+/** Saves a changed layout here right away and on the PC shortly after (edits come in bursts while dragging). */
+function saveLayout(dev) {
+  dev.layoutDirty = true;
+  persist();
+  clearTimeout(dev._pushTimer);
+  dev._pushTimer = setTimeout(() => pushLayout(dev), 400);
+}
+
+async function pushLayout(dev) {
+  const conn = conns.get(dev.key);
+  if (!conn || conn.status !== 'online' || dev._pushing) return;
+  dev._pushing = true;
+  const sent = JSON.stringify(dev.widgets);
+  try {
+    const rev = await conn.saveDashboard(dev.widgets);
+    dev.layoutRev = rev;
+    if (JSON.stringify(dev.widgets) === sent) dev.layoutDirty = false;   // else another edit came in meanwhile
+    persist();
+  } catch { /* offline: stays dirty and is sent on reconnect */ }
+  finally {
+    dev._pushing = false;
+    if (dev.layoutDirty) { clearTimeout(dev._pushTimer); dev._pushTimer = setTimeout(() => pushLayout(dev), 1000); }
+  }
+}
+
+/** The PC announced its layout revision (on connect and after every save from any browser). */
+async function syncLayout(dev, rev) {
+  if (dev.layoutDirty) { pushLayout(dev); return; }     // changes made here (perhaps offline) win
+  if (dev._pushing || rev === dev.layoutRev) return;
+  const conn = conns.get(dev.key);
+  try {
+    const saved = await conn.loadDashboard();
+    if (!saved.rev || !Array.isArray(saved.widgets)) {
+      // Nothing on the PC yet: this browser's layout becomes the PC's.
+      if (dev.widgets.length) { dev.layoutDirty = true; pushLayout(dev); }
+      return;
+    }
+    if (dev.layoutDirty || saved.rev === dev.layoutRev) return;
+    dev.widgets = normalizeItems(saved.widgets);
+    dev.layoutRev = saved.rev;
+    persist();
+    const p = pages.get(dev.key);
+    if (p?.dragging) p.pending = true; else renderPage(dev);
+    conn.subscribe();
+  } catch { /* offline or signed out; the next announcement retries */ }
+}
+
 // ---------- rendering
 function renderPages() {
   const host = $('#pages');
   const keep = new Set(state.devices.map((d) => d.key));
   for (const [key, p] of pages) {
-    if (!keep.has(key)) { p.widgets.forEach((w) => w.destroy()); p.section.remove(); pages.delete(key); }
+    if (!keep.has(key)) { p.widgets.forEach((w) => w.destroy()); p.ro.disconnect(); p.section.remove(); pages.delete(key); }
   }
   state.devices.forEach((dev) => {
     let p = pages.get(dev.key);
@@ -102,10 +160,30 @@ function renderPages() {
       section.className = 'page';
       const msg = document.createElement('div');
       msg.className = 'page-msg';
-      const grid = document.createElement('div');
-      grid.className = 'grid';
-      section.append(msg, grid);
-      p = { section, msg, grid, widgets: new Map() };
+      const board = document.createElement('div');
+      board.className = 'board';
+      section.append(msg, board);
+      p = { section, msg, board, widgets: new Map(), cols: 0 };
+      // Columns follow the page width: 4 on a phone, up to 16 on a wide screen.
+      p.ro = new ResizeObserver(() => applyColumns(p, dev));
+      p.ro.observe(board);
+      enableDnd(board, section, {
+        maxRows: ROW_LIMIT,
+        onReorder: () => reorderFromBoard(dev),
+        onResize: (id, w, h) => {
+          const item = dev.widgets.find((x) => x.id === id);
+          if (!item) return;
+          item.w = w; item.h = h;
+          saveLayout(dev);
+          applyColumns(p, dev, true);
+        },
+      });
+      section.addEventListener('pointerdown', () => { p.dragging = document.body.classList.contains('editing'); }, true);
+      addEventListener('pointerup', () => {
+        if (!p.dragging) return;
+        p.dragging = false;
+        if (p.pending) { p.pending = false; renderPage(dev); }
+      });
       pages.set(dev.key, p);
       renderPage(dev);
     }
@@ -124,40 +202,154 @@ function renderPages() {
   updateHeader();
 }
 
+const columnsFor = (width) => Math.max(4, Math.min(MAX_W, Math.floor((width + 10) / 90)));
+
+/** Sets the grid's column count and each card's span (a card never spans more columns than there are). */
+function applyColumns(p, dev, force = false) {
+  const cols = columnsFor(p.board.clientWidth);
+  if (cols === p.cols && !force) return;
+  p.cols = cols;
+  p.board.style.setProperty('--cols', cols);
+  for (const item of dev.widgets) {
+    const el = p.widgets.get(item.id)?.el;
+    if (!el) continue;
+    el.dataset.w = item.w;
+    el.dataset.h = item.h;
+    el.style.gridColumnEnd = `span ${Math.min(item.w, cols)}`;
+    el.style.gridRowEnd = `span ${item.h}`;
+  }
+}
+
+/** Splits the flat item list into sections: [{ section | null, items }]. Items before the first section come first. */
+function groupsOf(items) {
+  const groups = [{ section: null, items: [] }];
+  for (const x of items) {
+    if (isSection(x)) groups.push({ section: x, items: [] });
+    else groups[groups.length - 1].items.push(x);
+  }
+  return groups;
+}
+
 function renderPage(dev) {
   const p = pages.get(dev.key);
   if (!p) return;
   const conn = connectionFor(dev);
   p.widgets.forEach((w) => w.destroy());
   p.widgets.clear();
-  p.grid.replaceChildren();
+  p.board.replaceChildren();
 
-  dev.widgets.forEach((w, i) => {
-    const sensor = conn.sensors.get(w.sensor);
-    const inst = createWidget(w, sensor, widgetTools(dev, w, i));
-    inst.maxFrom = effectiveMaxFrom(w, sensor, conn.catalog);
-    inst.signature = widgetSignature(w, conn);
-    p.widgets.set(w.id, inst);
-    p.grid.append(inst.el);
-  });
+  for (const g of groupsOf(dev.widgets)) {
+    const group = document.createElement('div');
+    group.className = 'group' + (g.section ? '' : ' untitled');
+    if (g.section) {
+      group.dataset.section = g.section.id;
+      group.classList.toggle('collapsed', !!state.collapsed[g.section.id]);
+      group.append(sectionHead(dev, g.section, group));
+    }
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    for (const w of g.items) {
+      const sensor = conn.sensors.get(w.sensor);
+      const inst = createWidget(w, sensor, widgetTools(dev, w));
+      inst.maxFrom = effectiveMaxFrom(w, sensor, conn.catalog);
+      inst.signature = widgetSignature(w, conn);
+      inst.el.addEventListener('click', (e) => {
+        if (!editing && !e.target.closest('button')) openHistory(dev, w.id);
+      });
+      inst.el.tabIndex = 0;
+      inst.el.title = 'Show history';
+      inst.el.addEventListener('keydown', (e) => { if (!editing && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openHistory(dev, w.id); } });
+      p.widgets.set(w.id, inst);
+      grid.append(inst.el);
+    }
+    const add = document.createElement('button');
+    add.className = 'add-tile';
+    add.textContent = '+ Add widget';
+    add.onclick = () => openWidgetEditor(dev, null, g.section?.id ?? null);
+    grid.append(add);
+    group.append(grid);
+    p.board.append(group);
+  }
 
-  const add = document.createElement('button');
-  add.className = 'add-tile';
-  add.textContent = '+ Add widget';
-  add.onclick = () => openWidgetEditor(dev, null);
-  p.grid.append(add);
+  // Edit mode: page-level actions.
+  const tools = document.createElement('div');
+  tools.className = 'board-tools';
+  const addSection = document.createElement('button');
+  addSection.className = 'ghost';
+  addSection.textContent = '+ Add section';
+  addSection.onclick = () => {
+    const sec = { id: uid(), kind: 'section', title: 'New section' };
+    dev.widgets.push(sec);
+    saveLayout(dev);
+    renderPage(dev);
+    const input = p.board.querySelector(`.group[data-section="${sec.id}"] .sec-title-input`);
+    input?.focus(); input?.select();
+    input?.scrollIntoView({ block: 'nearest' });
+  };
+  tools.append(addSection);
   if (dev.widgets.length) {
     const reset = document.createElement('button');
-    reset.className = 'add-tile';
+    reset.className = 'ghost';
     reset.textContent = '↺ Suggested layout';
     reset.onclick = () => {
       if (!conn.catalog.length || !confirm(`Replace the ${dev.name} dashboard with the suggested layout?`)) return;
       dev.widgets = suggest(conn.catalog).map((w) => ({ ...w, id: uid() }));
-      persist(); renderPage(dev); conn.subscribe();
+      saveLayout(dev); renderPage(dev); conn.subscribe();
     };
-    p.grid.append(reset);
+    tools.append(reset);
   }
+  p.board.append(tools);
+  applyColumns(p, dev, true);
   renderMessage(dev);
+}
+
+function sectionHead(dev, sec, group) {
+  const head = document.createElement('div');
+  head.className = 'sec-head';
+  head.innerHTML = `
+    <button class="grip edit-only" type="button" title="Drag to move this section" aria-label="Move section">${ICON.grip}</button>
+    <button class="sec-toggle view-only" type="button" aria-expanded="true"><span class="sec-title"></span>${ICON.chevron}</button>
+    <input class="sec-title-input edit-only" maxlength="40" aria-label="Section name">
+    <button class="sec-del edit-only" type="button" title="Remove section (its widgets stay)">${ICON.del}</button>`;
+  $('.sec-title', head).textContent = sec.title;
+  const input = $('.sec-title-input', head);
+  input.value = sec.title;
+  input.onchange = () => {
+    sec.title = input.value.trim() || 'Section';
+    input.value = sec.title;
+    $('.sec-title', head).textContent = sec.title;
+    saveLayout(dev);
+  };
+  input.onkeydown = (e) => { if (e.key === 'Enter') input.blur(); };
+  const toggle = $('.sec-toggle', head);
+  toggle.setAttribute('aria-expanded', String(!state.collapsed[sec.id]));
+  toggle.onclick = () => {
+    const collapsed = !group.classList.contains('collapsed');
+    group.classList.toggle('collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    if (collapsed) state.collapsed[sec.id] = true; else delete state.collapsed[sec.id];
+    persist();
+    if (!collapsed) refreshVisible();
+  };
+  $('.sec-del', head).onclick = () => {
+    dev.widgets = dev.widgets.filter((x) => x !== sec);
+    delete state.collapsed[sec.id];
+    saveLayout(dev); renderPage(dev);
+  };
+  return head;
+}
+
+/** After a drag: the new order is whatever the board now shows. */
+function reorderFromBoard(dev) {
+  const p = pages.get(dev.key);
+  const byId = new Map(dev.widgets.map((x) => [x.id, x]));
+  const next = [];
+  for (const group of p.board.querySelectorAll(':scope > .group')) {
+    if (group.dataset.section) next.push(byId.get(group.dataset.section));
+    for (const card of group.querySelectorAll(':scope > .grid > .card')) next.push(byId.get(card.dataset.id));
+  }
+  dev.widgets = next.filter(Boolean);
+  saveLayout(dev);
 }
 
 function widgetSignature(w, conn) {
@@ -173,37 +365,33 @@ function widgetSignature(w, conn) {
 function refreshPage(dev) {
   const p = pages.get(dev.key);
   const conn = conns.get(dev.key);
-  if (!p || !conn || p.widgets.size !== dev.widgets.length) return false;
-  for (const w of dev.widgets) {
+  const widgets = dev.widgets.filter((x) => !isSection(x));
+  if (!p || !conn || p.widgets.size !== widgets.length) return false;
+  for (const w of widgets) {
     const inst = p.widgets.get(w.id);
     if (!inst || inst.signature !== widgetSignature(w, conn)) return false;
   }
-  for (const w of dev.widgets) p.widgets.get(w.id).setSensor(conn.sensors.get(w.sensor));
+  for (const w of widgets) p.widgets.get(w.id).setSensor(conn.sensors.get(w.sensor));
   renderMessage(dev);
   return true;
 }
 
-function widgetTools(dev, w, i) {
+/** Edit mode controls on a card: drag handle, edit, remove, and the resize corner. */
+function widgetTools(dev, w) {
   const tools = document.createElement('div');
   tools.className = 'card-tools';
-  const btn = (html, title, fn, cls = '') => {
-    const b = document.createElement('button');
-    b.innerHTML = html; b.title = title; b.className = cls; b.onclick = fn;
-    tools.append(b);
-  };
-  const move = (d) => () => {
-    const j = i + d;
-    if (j < 0 || j >= dev.widgets.length) return;
-    [dev.widgets[i], dev.widgets[j]] = [dev.widgets[j], dev.widgets[i]];
-    persist(); renderPage(dev);
-  };
-  btn(ICON.left, 'Move earlier', move(-1));
-  btn(ICON.right, 'Move later', move(1));
-  btn(ICON.edit, 'Edit', () => openWidgetEditor(dev, w));
-  btn(ICON.del, 'Remove', () => {
+  tools.innerHTML = `
+    <div class="tool-row">
+      <button class="grip" type="button" title="Drag to move" aria-label="Move">${ICON.grip}</button>
+      <button class="edit" type="button" title="Edit" aria-label="Edit">${ICON.edit}</button>
+      <button class="del" type="button" title="Remove" aria-label="Remove">${ICON.del}</button>
+    </div>
+    <span class="resize" title="Drag to resize" aria-hidden="true">${ICON.resize}</span>`;
+  $('.edit', tools).onclick = () => openWidgetEditor(dev, w);
+  $('.del', tools).onclick = () => {
     dev.widgets = dev.widgets.filter((x) => x !== w);
-    persist(); renderPage(dev); conns.get(dev.key)?.subscribe();
-  }, 'del');
+    saveLayout(dev); renderPage(dev); conns.get(dev.key)?.subscribe();
+  };
   return tools;
 }
 
@@ -225,10 +413,10 @@ function renderMessage(dev) {
       catch (ex) { err.textContent = ex.message; err.hidden = false; }
     };
     p.msg.append(form);
-    p.grid.hidden = true;
+    p.board.hidden = true;
     return;
   }
-  p.grid.hidden = false;
+  p.board.hidden = false;
 
   if (conn?.status === 'offline') {
     p.msg.innerHTML = `<div class="notice"><strong>Can't reach ${escapeHtml(dev.name)}.</strong> Retrying… <span class="sub">${escapeHtml(dev.url)}</span></div>`;
@@ -238,7 +426,7 @@ function renderMessage(dev) {
     box.innerHTML = '<p><strong>This dashboard is empty.</strong></p><p>Start with a suggested layout or add widgets one by one.</p><div class="inline"><button class="primary" data-a="quick">Suggested layout</button><button class="ghost" data-a="add">Add widget</button></div>';
     $('[data-a="quick"]', box).onclick = () => {
       dev.widgets = suggest(conn.catalog).map((w) => ({ ...w, id: uid() }));
-      persist(); renderPage(dev); conn.subscribe();
+      saveLayout(dev); renderPage(dev); conn.subscribe();
     };
     $('[data-a="add"]', box).onclick = () => openWidgetEditor(dev, null);
     p.msg.append(box);
@@ -317,11 +505,28 @@ document.addEventListener('visibilitychange', () => {
   if (dev) pages.get(dev.key)?.widgets.forEach((w) => w.refresh());
 });
 
+function refreshVisible() {
+  const dev = state.devices[active];
+  if (dev) pages.get(dev.key)?.widgets.forEach((w) => w.refresh());
+}
+
 // ---------- edit mode
 $('#btn-edit').onclick = () => {
   editing = !editing;
   document.body.classList.toggle('editing', editing);
   $('#btn-edit').setAttribute('aria-pressed', String(editing));
+};
+
+// ---------- phone preview: the dashboard at phone width (4 columns), to lay it out for the people who use it there
+function applyPreview() {
+  document.body.classList.toggle('phone-preview', state.preview);
+  $('#btn-preview').setAttribute('aria-pressed', String(state.preview));
+  requestAnimationFrame(() => { $('#pages').scrollTo({ left: active * $('#pages').clientWidth }); refreshVisible(); });
+}
+$('#btn-preview').onclick = () => {
+  state.preview = !state.preview;
+  persist();
+  applyPreview();
 };
 
 // ---------- widget editor
@@ -355,10 +560,10 @@ const readingCat = (s) => READING_CATS.find(([, , types]) => types.includes(s.ty
 const pick = { dev: 'all', read: 'all' };
 let unitShown = null;   // the size unit the form's numbers are in
 
-function openWidgetEditor(dev, widget) {
+function openWidgetEditor(dev, widget, sectionId = null) {
   const conn = conns.get(dev.key);
   if (!conn?.catalog.length) { alert('Connect to this device first to see its sensors.'); return; }
-  editTarget = { dev, widget };
+  editTarget = { dev, widget, sectionId };
   $('#widget-title').textContent = widget ? 'Edit widget' : 'Add widget';
   $('#w-search').value = '';
   const current = widget && conn.sensors.get(widget.sensor);
@@ -465,7 +670,11 @@ function fillSensorList(catalog, selectedId) {
 
 function fillWidgetForm(w, sensor, catalog) {
   $('#w-type').value = w.type;
-  $('#w-size').value = w.size || 'sm';
+  const [dw, dh] = defaultSize(w.type);
+  $('#w-w').value = w.w || dw;
+  $('#w-h').value = w.h || dh;
+  sizeType = w.type;
+  fillStyleOptions(w.type, w.style, w.pos);
   $('#w-label').value = w.label || '';
   $('#w-min').value = w.min ?? '';
   $('#w-max').value = w.max ?? '';
@@ -490,6 +699,34 @@ function fillWidgetForm(w, sensor, catalog) {
   $('#w-total-hint').textContent = total ? `(${total.map((id) => conns.get(editTarget.dev.key)?.sensors.get(id)?.name).join(' + ')})` : '';
   syncTotal();
 }
+
+/** Gauge style and value position choices follow the display type. */
+function fillStyleOptions(type, style, pos) {
+  const styleSel = $('#w-style');
+  if (!styleSel.options.length) for (const [v, l] of GAUGE_STYLES) styleSel.add(new Option(l, v));
+  styleSel.value = GAUGE_STYLES.some(([v]) => v === style) ? style : 'arc';
+  $('#w-style-field').hidden = type !== 'gauge';
+  const choices = positionsFor(type);
+  $('#w-pos-field').hidden = !choices;
+  const posSel = $('#w-pos');
+  posSel.replaceChildren();
+  if (!choices) return;
+  for (const [v, l] of choices) posSel.add(new Option(l, v));
+  posSel.value = choices.some(([v]) => v === pos) ? pos : defaultPosition(type, styleSel.value);
+}
+
+let sizeType = null;   // the display type the size fields were last defaulted for
+$('#w-type').addEventListener('change', () => {
+  const type = $('#w-type').value;
+  // A size still at the old type's default follows the new type (a gauge's 2×3 becomes a vertical bar's 1×3).
+  const [ow, oh] = defaultSize(sizeType);
+  if (Number($('#w-w').value) === ow && Number($('#w-h').value) === oh) [$('#w-w').value, $('#w-h').value] = defaultSize(type);
+  sizeType = type;
+  fillStyleOptions(type, $('#w-style').value, null);
+});
+$('#w-style').addEventListener('change', () => {
+  if ($('#w-type').value === 'gauge') $('#w-pos').value = defaultPosition('gauge', $('#w-style').value);
+});
 
 function syncTotal() {
   const on = !$('#w-total-field').hidden && $('#w-total').checked;
@@ -541,7 +778,10 @@ function readForm(id) {
     id,
     sensor: $('#w-sensor').value,
     type: $('#w-type').value,
-    size: $('#w-size').value,
+    w: Math.max(1, Math.min(MAX_W, Math.round(Number($('#w-w').value) || 1))),
+    h: Math.max(1, Math.min(MAX_H, Math.round(Number($('#w-h').value) || 1))),
+    style: $('#w-type').value === 'gauge' ? $('#w-style').value : undefined,
+    pos: positionsFor($('#w-type').value) ? $('#w-pos').value : undefined,
     label: $('#w-label').value.trim(),
     min: num('#w-min') ?? 0,
     max: useTotal ? null : num('#w-max'),
@@ -552,14 +792,23 @@ function readForm(id) {
   };
 }
 
+/** Where a new widget goes: the end of its section (or of the unsectioned part at the top). */
+function insertIndex(items, sectionId) {
+  let i = sectionId ? items.findIndex((x) => x.id === sectionId) : -1;
+  if (sectionId && i < 0) return items.length;
+  for (i += 1; i < items.length && !isSection(items[i]); i++);
+  return i;
+}
+
 dlgWidget.addEventListener('close', () => {
   if (dlgWidget.returnValue !== 'save' || !editTarget) return;
-  const { dev, widget } = editTarget;
+  const { dev, widget, sectionId } = editTarget;
   const next = readForm(widget?.id || uid());
   if (!next.sensor) return;
-  if (widget) dev.widgets[dev.widgets.indexOf(widget)] = next;
-  else dev.widgets.push(next);
-  persist();
+  const at = widget ? dev.widgets.findIndex((x) => x.id === widget.id) : -1;
+  if (at >= 0) dev.widgets[at] = next;
+  else dev.widgets.splice(insertIndex(dev.widgets, sectionId), 0, next);
+  saveLayout(dev);
   renderPage(dev);
   conns.get(dev.key)?.subscribe();
   editTarget = null;
@@ -690,8 +939,12 @@ $('#import-file').onchange = async (e) => {
     if (data.app !== 'syscom' || !Array.isArray(data.devices)) throw new Error('Not a SYSCOM layout file.');
     for (const d of data.devices) {
       const existing = state.devices.find((x) => (d.serverId && x.serverId === d.serverId) || x.url === d.url);
-      if (existing) { existing.widgets = d.widgets || []; existing.interval = d.interval || existing.interval; existing.name = d.name || existing.name; }
-      else state.devices.push(normalizeDevice({ ...d, key: uid(), token: null }));
+      if (existing) {
+        existing.widgets = normalizeItems(d.widgets);
+        existing.layoutDirty = true;   // goes to the PC on the next connection
+        existing.interval = d.interval || existing.interval;
+        existing.name = d.name || existing.name;
+      } else state.devices.push(normalizeDevice({ ...d, key: uid(), token: null, layoutDirty: true }));
     }
     if (data.theme) state.theme = data.theme;
     persist();
@@ -705,6 +958,81 @@ $('#import-file').onchange = async (e) => {
   }
 };
 
+// ---------- history: tap a card for its sensor's last 1 to 30 days
+const dlgHistory = $('#dlg-history');
+const RANGES = [[1, 'Last 24 hours'], [3, 'Last 3 days'], [7, 'Last 7 days'], [14, 'Last 14 days'], [30, 'Last 30 days']];
+const chart = new HistoryChart($('#h-canvas'), $('#h-tip'));
+let historyOf = null;    // { dev, id }
+let historyTimer = 0;
+let historyRequest = 0;
+
+function openHistory(dev, id) {
+  historyOf = { dev, id };
+  $('#h-range').value = '0';    // always opens on the last day
+  dlgHistory.showModal();
+  loadHistory();
+}
+
+async function loadHistory() {
+  if (!historyOf) return;
+  const { dev, id } = historyOf;
+  const w = dev.widgets.find((x) => x.id === id);
+  const conn = conns.get(dev.key);
+  if (!w || !conn) { dlgHistory.close(); return; }
+  const sensor = conn.sensors.get(w.sensor);
+  const [days, rangeLabel] = RANGES[Number($('#h-range').value)] || RANGES[0];
+  $('#h-title').textContent = w.label || sensor?.name || 'Sensor';
+  $('#h-sub').textContent = [sensor?.hardware, sensor?.name !== (w.label || sensor?.name) ? sensor?.name : null].filter(Boolean).join(' · ');
+  $('#h-range-label').textContent = rangeLabel;
+  $('#h-range').setAttribute('aria-valuetext', rangeLabel);
+  document.querySelectorAll('#h-ticks button').forEach((b) => b.classList.toggle('active', b.dataset.i === $('#h-range').value));
+  clearTimeout(historyTimer);
+  historyTimer = setTimeout(loadHistory, 60_000);   // keep the open chart current
+
+  const req = ++historyRequest;
+  $('#h-empty').hidden = true;
+  try {
+    const data = await conn.history(w.sensor, days);
+    if (req !== historyRequest) return;
+    const unit = displayUnit(w, sensor);
+    chart.set(data, {
+      unit, k: unitFactor(sensor?.unit, unit), decimals: w.decimals ?? 0,
+      thresholds: w.thresholds, scaleMin: w.min, scaleMax: effectiveMaxFrom(w, sensor, conn.catalog) ? null : w.max,
+    });
+    const st = chart.stats();
+    const f = (v) => { const o = formatValue(v, unit, w.decimals); return `<b>${o}</b>`; };
+    $('#h-stats').innerHTML = st ? `<span>Lowest ${f(st.lo)}</span><span>Average ${f(st.avg)}</span><span>Highest ${f(st.hi)}</span>` : '';
+    if (!st) {
+      $('#h-empty').textContent = data.enabled === false
+        ? 'History is turned off on this PC (HistoryEnabled in config.json).'
+        : 'No history for this range yet. SYSCOM records every sensor while it runs, and the first point shows up within a minute.';
+      $('#h-empty').hidden = false;
+    }
+  } catch (ex) {
+    if (req !== historyRequest) return;
+    chart.set({ step: 60, start: 0, avg: [], min: [], max: [] }, {});
+    $('#h-stats').innerHTML = '';
+    $('#h-empty').textContent = `Couldn't load the history: ${ex.message}`;
+    $('#h-empty').hidden = false;
+  }
+}
+
+function formatValue(v, unit, decimals) {
+  const f = format(v, unit, decimals);
+  return `${f.n}${f.u ? ' ' + f.u : ''}`;
+}
+
+$('#h-range').addEventListener('input', loadHistory);
+$('#h-ticks').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  $('#h-range').value = b.dataset.i;
+  loadHistory();
+});
+dlgHistory.querySelector('[data-close]').onclick = () => dlgHistory.close();
+dlgHistory.addEventListener('click', (e) => { if (e.target === dlgHistory) dlgHistory.close(); });
+dlgHistory.addEventListener('close', () => { clearTimeout(historyTimer); historyOf = null; });
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -717,6 +1045,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 applyTheme();
+applyPreview();
 
 (async function start() {
   // First visit: add the server that served this page.

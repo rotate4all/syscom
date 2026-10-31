@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Net.WebSockets;
 using System.Text.Json;
+using Syscom.Server.Dashboards;
 using Syscom.Server.Sensors;
 
 namespace Syscom.Server.Streaming;
@@ -11,6 +12,7 @@ namespace Syscom.Server.Streaming;
 ///   client → {"type":"subscribe","interval":1000,"sensors":["id",...]}   (omit sensors = all)
 ///   server → {"type":"subscribed","interval":1000,"sensors":["id",...]}
 ///   server → {"type":"data","t":unixMs,"v":[number|null,...]}            (same order as "subscribed")
+///   server → {"type":"layout","rev":n}       the PC's dashboard changed (sent on connect too); GET /api/dashboard
 /// </summary>
 public sealed class MetricsSession
 {
@@ -18,17 +20,20 @@ public sealed class MetricsSession
 
     private readonly WebSocket _ws;
     private readonly SensorHub _hub;
+    private readonly DashboardStore _dashboards;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private volatile string[]? _subscription; // null = everything
     private volatile bool _resubscribed;
     private volatile bool _hasSubscribed;
     private int _sentCatalogVersion = -1;
+    private int _sentLayoutRev = -1;
 
-    public MetricsSession(WebSocket ws, SensorHub hub)
+    public MetricsSession(WebSocket ws, SensorHub hub, DashboardStore dashboards)
     {
         _ws = ws;
         _hub = hub;
+        _dashboards = dashboards;
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -112,6 +117,7 @@ public sealed class MetricsSession
             while (await timer.WaitForNextTickAsync(ct))
             {
                 await SendCatalogIfChanged(ct);
+                await SendLayoutIfChanged(ct);
                 if (!_hasSubscribed) continue;
 
                 // Clear the flag before reading the subscription so a concurrent change is announced next tick.
@@ -156,6 +162,14 @@ public sealed class MetricsSession
         {
             timer.Dispose();
         }
+    }
+
+    private async Task SendLayoutIfChanged(CancellationToken ct)
+    {
+        var rev = _dashboards.Rev;
+        if (rev == _sentLayoutRev) return;
+        _sentLayoutRev = rev;
+        await SendJson(w => { w.WriteString("type", "layout"); w.WriteNumber("rev", rev); }, ct);
     }
 
     private async Task SendCatalogIfChanged(CancellationToken ct)

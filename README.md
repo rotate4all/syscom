@@ -31,12 +31,16 @@ component by component.
   `http://<pc>:47810`. Nothing to install on phones, though you can install the dashboard as an app.
 - **Many PCs, one dashboard.** Add every SYSCOM machine you own and swipe between them. SYSCOM servers find each
   other on the LAN automatically.
-- **A configurable dashboard per PC.** Gauges, bars, live graphs and big numbers. Add, remove, reorder and resize
-  widgets, and start from a suggested layout.
+- **A configurable dashboard per PC, saved on that PC.** Five gauge styles, horizontal and vertical bars, live graphs
+  and big numbers, grouped in sections. Drag cards to reorder them, drag a corner to resize them (the content scales
+  with the card), choose where the value sits, and start from a suggested layout. Every browser and phone that signs
+  in sees the same layout, and a phone preview lets you lay it out for phones from your PC.
+- **30 days of history for every sensor.** Tap any card for a chart of the last 1, 3, 7, 14 or 30 days, with the
+  lowest, average and highest readings.
 - **Min / med / max thresholds** per widget, each with its own colour (for example green, amber, red, or reversed for
   FPS).
-- **Polling you control:** 1 s by default, down to 500 ms, set per PC. Servers only read hardware while someone is
-  watching.
+- **Polling you control:** 1 s by default, down to 500 ms, set per PC. With nobody watching, a server reads its
+  sensors every 2 s for the history (or not at all, with history turned off).
 - **Light, dark or automatic theme.**
 - **Installable phone app.** Scan a QR code from the tray app; the phone trusts that PC's own certificate once and
   installs the dashboard as an app over HTTPS. No cloud account, no public domain.
@@ -91,14 +95,20 @@ yours if it's older. The tray app warns you if PawnIO is ever missing or older t
 
 - **First visit:** the dashboard is empty. Tap **Suggested layout** to get CPU, GPU, RAM, disk and network
   widgets, or **Add widget** to pick sensors yourself.
-- **Edit:** tap the pencil to enter edit mode. Each widget then gets ◀ ▶ (reorder), ✎ (sensor, display type,
-  size, scale, thresholds) and 🗑.
+- **Edit:** tap the pencil to enter edit mode. Drag a card to move it (on a touch screen, drag it by its ⠿ handle),
+  drag its bottom-right corner to resize it, ✎ edits it (sensor, display, style, value position, size, scale,
+  thresholds) and 🗑 removes it. **+ Add section** adds a titled group; drag a section by its handle to move it with
+  its cards. Outside edit mode, tap a section title to fold it away.
+- **Phone preview:** on a PC, the phone button next to the pencil shows the dashboard at phone width (4 cells
+  across), so you can arrange it for the phones that will view it. Edits there are saved like any other.
+- **History:** tap a card. The slider picks the last 1, 3, 7, 14 or 30 days (1 day when it opens). The line is the
+  average and the band behind it the lowest to highest reading; hover or touch the chart for exact values.
 - **Thresholds:** each widget has *min*, *med* and *max* values with a colour each. The widget takes the colour of the
   highest threshold the reading has reached. Leave a value empty to turn it off.
 - **More PCs:** Settings → *Add device*. PCs found on your network are listed, or you can type an address. Swipe
   left or right (or use the arrow keys) to switch.
 - **Polling:** Settings → per device, *Every … ms* (minimum 500).
-- **Backup:** Settings → *Export layout* saves your dashboards to a file you can import in another browser.
+- **Backup:** Settings → *Export layout* saves your dashboards to a file you can import later or elsewhere.
 
 ### Install it as a phone app
 
@@ -119,9 +129,9 @@ page. The secure dashboard then talks to every PC over HTTPS.
 Without the certificate, *Add to Home Screen* still works over plain HTTP: iPhone opens it full screen, Android
 creates a shortcut that opens in Chrome.
 
-Layouts are stored per browser and per address (HTTP and HTTPS count as different addresses). Open the dashboard
-from the same PC address each time and all your devices and layouts will be there. Settings → *Export* / *Import*
-moves them between addresses.
+Each PC keeps its own dashboard, so a layout you prepare on your PC is what the phone shows. The list of PCs and the
+theme are kept per browser and per address (HTTP and HTTPS count as different addresses): open the dashboard from the
+same PC address each time, and add the other PCs from there.
 
 ## Updating
 
