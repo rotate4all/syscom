@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest an idea for SYSCOM
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: Describe the problem or use case, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Proposed solution
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This is about monitoring (SYSCOM doesn't control hardware)
+          required: true

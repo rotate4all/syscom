@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#0e1116">
+  <title>SYSCOM</title>
+  <meta name="description" content="Live hardware monitor for the PCs on your network">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+  <!-- iPhone / iPad: full-screen app when added to the home screen -->
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="SYSCOM">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="title">
+      <span id="status" class="dot" title="Status"></span>
+      <h1 id="device-name">SYSCOM</h1>
+    </div>
+    <div class="actions">
+      <button id="btn-edit" class="icon" title="Edit dashboard" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>
+      </button>
+      <button id="btn-settings" class="icon" title="Settings">
+        <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="pages" aria-live="polite"></main>
+  <nav id="dots" aria-label="Devices"></nav>
+
+  <!-- Add / edit widget -->
+  <dialog id="dlg-widget">
+    <form method="dialog" class="sheet" id="widget-form">
+      <h2 id="widget-title">Add widget</h2>
+
+      <label class="field">Sensor
+        <input type="search" id="w-search" placeholder="Filter sensors…" autocomplete="off">
+        <select id="w-sensor" size="7" required></select>
+      </label>
+
+      <div class="row">
+        <label class="field">Display
+          <select id="w-type">
+            <option value="gauge">Gauge</option>
+            <option value="bar">Bar</option>
+            <option value="graph">Graph</option>
+            <option value="value">Value</option>
+          </select>
+        </label>
+        <label class="field">Size
+          <select id="w-size">
+            <option value="sm">Normal</option>
+            <option value="lg">Wide</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="field">Label <input id="w-label" maxlength="40"></label>
+
+      <div class="row">
+        <label class="field">Scale min <input id="w-min" type="number" step="any" placeholder="0"></label>
+        <label class="field">Scale max <input id="w-max" type="number" step="any" placeholder="auto"></label>
+        <label class="field">Decimals
+          <select id="w-dec"><option>0</option><option>1</option><option>2</option></select>
+        </label>
+      </div>
+
+      <fieldset class="thresholds">
+        <legend>Thresholds <small>colour applies from each value upward</small></legend>
+        <div class="th"><span>Min</span><input id="t0-v" type="number" step="any" placeholder="off"><input id="t0-c" type="color"></div>
+        <div class="th"><span>Med</span><input id="t1-v" type="number" step="any" placeholder="off"><input id="t1-c" type="color"></div>
+        <div class="th"><span>Max</span><input id="t2-v" type="number" step="any" placeholder="off"><input id="t2-c" type="color"></div>
+      </fieldset>
+
+      <div class="buttons">
+        <button value="cancel" formnovalidate class="ghost">Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Settings -->
+  <dialog id="dlg-settings">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2>Settings</h2>
+        <button class="icon" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+
+      <section>
+        <h3>Appearance</h3>
+        <div class="segmented" id="theme">
+          <button data-theme="auto">Auto</button>
+          <button data-theme="light">Light</button>
+          <button data-theme="dark">Dark</button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Devices</h3>
+        <ul id="device-list" class="list"></ul>
+      </section>
+
+      <section>
+        <h3>Add device</h3>
+        <ul id="peer-list" class="list"></ul>
+        <form id="add-device" class="inline">
+          <input id="add-url" placeholder="192.168.1.20:47810" autocomplete="off" required>
+          <button class="primary">Add</button>
+        </form>
+        <p id="add-error" class="error" hidden></p>
+      </section>
+
+      <section>
+        <h3>Backup</h3>
+        <div class="inline">
+          <button id="btn-export" class="ghost">Export layout</button>
+          <label class="ghost button">Import<input id="import-file" type="file" accept="application/json" hidden></label>
+        </div>
+        <p class="hint">Layouts are saved in this browser. Passwords and sign-ins are not exported.</p>
+      </section>
+    </div>
+  </dialog>
+
+  <template id="tpl-login">
+    <form class="login">
+      <p>Sign in to <strong data-name></strong></p>
+      <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+      <button class="primary">Sign in</button>
+      <p class="error" hidden></p>
+    </form>
+  </template>
+</body>
+</html>

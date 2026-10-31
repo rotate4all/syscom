@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build server, updater and tray app (win-x64)
+        shell: pwsh
+        run: |
+          foreach ($p in 'Syscom.Server', 'Syscom.Updater', 'Syscom.Tray') {
+            dotnet build "src/$p" -c Release -r win-x64 -warnaserror
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check web client syntax
+        shell: pwsh
+        run: Get-ChildItem web/js/*.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit 1 } }
+
+  smoke:
+    # Starts the server with mock sensors on Linux and checks the public endpoints.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Run server and probe it
+        run: |
+          dotnet build src/Syscom.Server -c Release
+          dotnet src/Syscom.Server/bin/Release/net10.0/syscom.dll --mock --config "$RUNNER_TEMP/cfg/config.json" &
+          for i in $(seq 1 30); do curl -sf localhost:47810/api/health && break; sleep 1; done
+          curl -sf localhost:47810/api/info
+          curl -sf localhost:47810/ | grep -q "<title>SYSCOM</title>"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/sensors)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/admin/components)" = "403"

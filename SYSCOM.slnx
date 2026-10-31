@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Syscom.Server/Syscom.Server.csproj" />
+    <Project Path="src/Syscom.Tray/Syscom.Tray.csproj" />
+    <Project Path="src/Syscom.Updater/Syscom.Updater.csproj" />
+  </Folder>
+</Solution>

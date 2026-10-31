@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>syscom</AssemblyName>
+    <RootNamespace>Syscom.Server</RootNamespace>
+    <!-- Keep the footprint small: workstation GC, non-concurrent. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <!-- LibreHardwareMonitorLib ships Windows-only, RID-specific assets, so it is only referenced for Windows
+       builds. Other builds (e.g. Linux, for client development) use the mock sensor source. -->
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <DefineConstants>$(DefineConstants);LHM</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Hosting" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <!-- The single hardware-monitoring dependency (MPL-2.0). -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="$(LhmVersion)" />
+    <!-- Lets syscom.exe run as a Windows service (Microsoft platform package). -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="$(WindowsServicesVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
+    <!-- Fallback copy of the web client inside the exe; a web\ folder next to the exe takes precedence. -->
+    <EmbeddedResource Include="..\..\web\**\*" LogicalName="wwwroot/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

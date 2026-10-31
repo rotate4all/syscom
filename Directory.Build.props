@@ -1,0 +1,37 @@
+<Project>
+  <!--
+    Shared build settings. Component versions are pinned in versions.json; build\package.ps1 passes them in as
+    properties, so the values below are only the defaults for IDE / `dotnet build` runs.
+  -->
+  <PropertyGroup>
+    <SyscomVersion Condition="'$(SyscomVersion)' == ''">0.1.0</SyscomVersion>
+    <LhmVersion Condition="'$(LhmVersion)' == ''">0.9.6</LhmVersion>
+    <WindowsServicesVersion Condition="'$(WindowsServicesVersion)' == ''">10.0.14</WindowsServicesVersion>
+
+    <TargetFramework>net10.0</TargetFramework>
+    <Version>$(SyscomVersion)</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Company>SYSCOM</Company>
+    <Product>SYSCOM</Product>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <!-- Every DLL in the install folder is loaded as-is (no deps.json pinning), so a component can be
+         replaced by dropping in a newer file. A bad drop-in fails the updater's health check and is rolled back. -->
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+
+    <!-- The executables look for the bundled .NET runtime in .\runtime next to them (no system-wide install). -->
+    <AppHostDotNetSearch>AppRelative</AppHostDotNetSearch>
+    <AppHostRelativeDotNet>runtime</AppHostRelativeDotNet>
+  </PropertyGroup>
+
+  <!-- Windows builds: everything targets win-x64 so Windows-only packages resolve. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == '' And '$(OS)' == 'Windows_NT'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <SelfContained>false</SelfContained>
+    <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+  </PropertyGroup>
+</Project>

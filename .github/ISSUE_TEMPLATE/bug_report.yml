@@ -1,0 +1,34 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: SYSCOM version
+      description: Shown in the tray app's window (or /api/info).
+    validations:
+      required: true
+  - type: textarea
+    id: components
+    attributes:
+      label: Component status
+      description: Copy the component table from the tray app (installed versions and health).
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware and Windows version
+      placeholder: "e.g. Ryzen 7 7800X3D, RTX 4080, Windows 11 24H2"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: For update problems, attach %ProgramData%\SYSCOM\updates\<latest>\updater.log.
+      render: text

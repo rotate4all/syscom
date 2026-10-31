@@ -1,0 +1,50 @@
+name: Release
+
+# Push a tag like v0.2.0 (matching "syscom" in versions.json) to build the package and publish a GitHub release.
+# Installed copies of SYSCOM read feed.json from the latest release to offer the update in the tray app.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check tag matches versions.json
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $v = (Get-Content versions.json -Raw | ConvertFrom-Json).syscom
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match versions.json ($v)" }
+
+      - name: Build package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./build/package.ps1 -Repository "${{ github.repository }}"
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem dist -File | ForEach-Object FullName
+          gh release create "${{ github.ref_name }}" $files --title "SYSCOM ${{ github.ref_name }}" --generate-notes
+
+      - name: Keep build output (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: syscom-package
+          path: dist/*.*
