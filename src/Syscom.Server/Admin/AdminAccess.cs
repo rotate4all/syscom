@@ -38,6 +38,13 @@ public sealed class AdminAccess
     private static void RestrictDataDir(ILogger log)
     {
         if (!OperatingSystem.IsWindows()) return;
+        if (!Elevation.IsAdministrator())
+        {
+            // Locking the folder to Administrators from a non-elevated run would lock this process out of its own
+            // config on the next start. The service and elevated runs restrict it.
+            log.LogWarning("Not running as administrator: {Dir} is not locked down", SyscomPaths.DataDir);
+            return;
+        }
         try
         {
             using var p = Process.Start(new ProcessStartInfo("icacls.exe",
