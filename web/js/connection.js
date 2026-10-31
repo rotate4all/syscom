@@ -14,7 +14,14 @@ export class Connection extends EventTarget {
     this.timer = 0;
   }
 
-  get base() { return this.device.url.replace(/\/+$/, ''); }
+  /** A dashboard opened over HTTPS must reach every PC over HTTPS too (browsers block mixed content). */
+  get base() {
+    const url = new URL(this.device.url);
+    if (location.protocol === 'https:' && this.device.httpsPort) return `https://${url.hostname}:${this.device.httpsPort}`;
+    return url.origin;
+  }
+
+  get secure() { return this.base.startsWith('https:'); }
 
   async info() {
     const r = await fetch(this.base + '/api/info', { cache: 'no-store' });

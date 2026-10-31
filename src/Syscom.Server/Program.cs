@@ -5,6 +5,7 @@ using Syscom.Server.Config;
 using Syscom.Server.Discovery;
 using Syscom.Server.Sensors;
 using Syscom.Server.Streaming;
+using Syscom.Server.Tls;
 using Syscom.Server.Web;
 using Syscom.Shared;
 
@@ -16,6 +17,7 @@ if (options.ShowHelp)
 
           --config <path>        Config file (default: %ProgramData%\SYSCOM\config.json)
           --port <n>             HTTP port (default 47810)
+          --https-port <n>       HTTPS port (default 47812)
           --name <name>          Name shown in the web client (default: computer name)
           --set-password <pw>    Set the login password and exit (signs out all clients)
           --mock                 Serve synthetic sensor data (for client development)
@@ -27,6 +29,7 @@ if (options.ShowHelp)
 
 var cfg = ServerConfig.Load(options.ConfigPath ?? ServerConfig.DefaultPath());
 if (options.Port is { } port) cfg.Port = port;
+if (options.HttpsPort is { } httpsPort) cfg.HttpsPort = httpsPort;
 if (options.Name is { } name) cfg.Name = name;
 
 if (options.SetPassword is { } newPassword)
@@ -50,7 +53,19 @@ if (string.IsNullOrEmpty(cfg.PasswordHash))
 cfg.Save();
 
 var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { ContentRootPath = AppContext.BaseDirectory });
-builder.WebHost.UseUrls($"http://0.0.0.0:{cfg.Port}");
+// HTTP for everyone; HTTPS (own certificate, see Tls/TlsManager.cs) so phones can install the dashboard as an app.
+var tls = cfg.HttpsEnabled ? TryCreateTls() : null;
+builder.WebHost.ConfigureKestrel(k =>
+{
+    k.ListenAnyIP(cfg.Port);
+    if (tls is not null)
+        k.ListenAnyIP(cfg.HttpsPort, listen => listen.UseHttps(https => https.ServerCertificateSelector = (_, _) => tls.Current));
+});
+if (tls is not null)
+{
+    builder.Services.AddSingleton(tls);
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<TlsManager>());
+}
 #if WINDOWS
 builder.Services.AddWindowsService(o => o.ServiceName = SyscomPaths.ServiceName);
 #endif
@@ -126,6 +141,10 @@ api.MapGet("/info", () => Results.Ok(new
     version,
     os = Environment.OSVersion.VersionString,
     minIntervalMs = cfg.MinIntervalMs,
+    port = cfg.Port,
+    httpsPort = tls is not null ? cfg.HttpsPort : (int?)null,
+    caFingerprint = tls?.CaFingerprint,
+    caName = tls?.CaName,
     sources = hub.SourceNames,
 }));
 
@@ -148,7 +167,7 @@ api.MapGet("/sensors", (HttpContext ctx) =>
 
 api.MapGet("/peers", (HttpContext ctx) =>
     Authorized(ctx)
-        ? Results.Ok(discovery.Peers.Select(p => new { p.Id, p.Name, p.Url }))
+        ? Results.Ok(discovery.Peers.Select(p => new { p.Id, p.Name, p.Url, p.HttpsUrl }))
         : Results.Unauthorized());
 
 app.Map("/ws", async (HttpContext ctx) =>
@@ -170,6 +189,14 @@ app.Map("/ws", async (HttpContext ctx) =>
     await new MetricsSession(ws, hub).RunAsync(ctx.RequestAborted);
 });
 
+// ---- certificate for phones (public: it's a CA certificate, no secrets)
+app.MapGet("/tls/syscom-ca.crt", () => tls is null
+    ? Results.NotFound()
+    : Results.File(tls.CaCertificateDer, "application/x-x509-ca-cert", $"SYSCOM-{cfg.Name}.crt"));
+app.MapGet("/tls/syscom.mobileconfig", () => tls is null
+    ? Results.NotFound()
+    : Results.Text(tls.MobileConfig(), "application/x-apple-aspen-config", System.Text.Encoding.UTF8));
+
 // ---- management API for the tray app: loopback only + admin key
 var mgmt = api.MapGroup("/admin").AddEndpointFilter(async (ctx, next) =>
     admin.IsAuthorized(ctx.HttpContext) ? await next(ctx) : Results.StatusCode(StatusCodes.Status403Forbidden));
@@ -177,7 +204,8 @@ var mgmt = api.MapGroup("/admin").AddEndpointFilter(async (ctx, next) =>
 mgmt.MapGet("/status", () => Results.Ok(new ServerStatus(
     cfg.Name, version, cfg.Port,
     LanDiscovery.LocalAddresses().Select(ip => $"http://{ip}:{cfg.Port}").ToList(),
-    hub.Clients, hub.Catalog.Count, WindowsServiceHelpers.IsService(), cfg.UpdateFeedUrl, components.LastUpdate)));
+    hub.Clients, hub.Catalog.Count, WindowsServiceHelpers.IsService(), cfg.UpdateFeedUrl, components.LastUpdate,
+    tls is not null ? cfg.HttpsPort : null, tls?.CaFingerprint)));
 
 mgmt.MapGet("/components", () => Results.Ok(components.Status()));
 
@@ -214,6 +242,12 @@ app.Lifetime.ApplicationStarted.Register(() =>
     Console.WriteLine($"  SYSCOM {version}  ·  {cfg.Name}");
     Console.WriteLine($"  Sensors: {string.Join(", ", hub.SourceNames)} ({hub.Catalog.Count})");
     foreach (var ip in LanDiscovery.LocalAddresses()) Console.WriteLine($"  Open:    http://{ip}:{cfg.Port}");
+    if (tls is not null)
+    {
+        var lan = LanDiscovery.LocalAddresses().FirstOrDefault() ?? "<this PC>";
+        Console.WriteLine($"  HTTPS:   port {cfg.HttpsPort} · phone setup: http://{lan}:{cfg.Port}/trust (or tray app → Set up phone)");
+        Console.WriteLine($"  CA SHA-256: {tls.CaFingerprint}");
+    }
     if (generatedPassword is not null)
     {
         Console.WriteLine($"  Password (generated, change with --set-password): {generatedPassword}");
@@ -236,6 +270,19 @@ app.Lifetime.ApplicationStarted.Register(() =>
 app.Run();
 return 0;
 
+TlsManager? TryCreateTls()
+{
+    try
+    {
+        return new TlsManager(LoggerFactory.Create(b => b.AddConsole()).CreateLogger<TlsManager>());
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  Warning: HTTPS disabled, certificate setup failed: {ex.Message}");
+        return null;
+    }
+}
+
 internal sealed record LoginRequest(string? Password);
 internal sealed record PasswordRequest(string? Password);
 internal sealed record UpdateRequest(string[]? Ids);
@@ -255,6 +302,7 @@ internal sealed class CliOptions
 {
     public string? ConfigPath { get; private set; }
     public int? Port { get; private set; }
+    public int? HttpsPort { get; private set; }
     public string? Name { get; private set; }
     public string? SetPassword { get; private set; }
     public bool Mock { get; private set; }
@@ -270,6 +318,7 @@ internal sealed class CliOptions
             {
                 case "--config": o.ConfigPath = Next(); break;
                 case "--port": o.Port = int.Parse(Next()); break;
+                case "--https-port": o.HttpsPort = int.Parse(Next()); break;
                 case "--name": o.Name = Next(); break;
                 case "--set-password": o.SetPassword = Next(); break;
                 case "--mock": o.Mock = true; break;

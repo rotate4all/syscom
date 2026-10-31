@@ -6,9 +6,10 @@ SYSCOM is a server-only system. Every monitored PC runs the same server; browser
  phone / tablet / PC browser                         Windows PC (one per monitored machine)
 ┌───────────────────────────┐   HTTP + WebSocket    ┌──────────────────────────────────────────────┐
 │ web dashboard (web/)      │◀────────────────────▶ │ syscom.exe  (Windows service "SYSCOM")       │
-│  • one page per PC        │     :47810            │  ├─ SensorHub ── LibreHardwareMonitorLib ─┐  │
+│  • one page per PC        │  :47810 / :47812 TLS  │  ├─ SensorHub ── LibreHardwareMonitorLib ─┐  │
 │  • swipe between PCs      │                       │  │             └─ DriveSpaceSource (.NET) │  │
 │  • layouts in localStorage│                       │  ├─ Auth (password → signed token)        │  │
+│  • installable (PWA)      │                       │  ├─ TlsManager (own CA, HTTPS certificate) │  │
 └───────────────────────────┘                       │  ├─ LanDiscovery (UDP :47811 broadcast)    │  │
                                                     │  ├─ ComponentManager (health, updates)     │  │
                                                     │  └─ Web client (web\ folder or embedded)   │  │
@@ -35,6 +36,18 @@ Windows service, or as a console app for development.
 | `ComponentManager` | `Components/` | Health, version checks and updates for each component (see [UPDATES.md](UPDATES.md)). |
 | `AdminAccess` | `Admin/AdminAccess.cs` | Guards `/api/admin/*`: loopback only, plus the key in `%ProgramData%\SYSCOM\admin.key` (folder ACL: SYSTEM and Administrators). |
 | `WebClient` | `Web/WebClient.cs` | Serves `web\` next to the exe, falling back to a copy embedded in the exe. |
+| `TlsManager` | `Tls/TlsManager.cs` | Optional HTTPS. Creates this PC's own certificate authority once (20 years, name-constrained to private addresses, `*.local` and the PC's name) and a server certificate for the current LAN addresses (397 days). Re-checks every 5 minutes and re-issues the server certificate when addresses change or expiry nears, so phones only trust the CA once. |
+
+### HTTPS and the phone app
+
+Browsers only install web apps (and only run service workers) on secure origins. A home PC has no public domain,
+so there's no public certificate to get. Instead each PC is its own tiny CA, and a phone trusts it once through
+`/trust`: an iOS configuration profile or a DER certificate, plus per-platform steps. The tray app's
+**Set up phone…** window shows a QR code for that page (a built-in encoder, `src/Syscom.Tray/QrCode.cs`) and the
+CA fingerprint to compare.
+
+When the dashboard itself is opened over HTTPS, it talks to every PC on that PC's HTTPS port (`httpsPort` from
+`/api/info`, or `httpsUrl` from `/api/peers`), because a secure page can't open plain `ws://` connections.
 
 ### Why one polling loop?
 
@@ -52,6 +65,8 @@ Plain ES modules, no framework and no build step. About 40 KB uncompressed.
 | `js/connection.js` | Login, WebSocket stream, reconnect with backoff, `4401` close code means "sign in again" |
 | `js/widgets.js` | Gauge (SVG), bar (CSS), graph (canvas), value; threshold colouring; suggested layout |
 | `js/store.js` | Devices, dashboards and theme in `localStorage`; export/import |
+| `sw.js`, `manifest.webmanifest` | App shell cache and install metadata (PWA) |
+| `trust.html` | Phone setup page served at `/trust` |
 
 Swiping is native CSS scroll-snap, so there's no gesture library. Only the visible page repaints; hidden pages keep
 graph history. When the tab or phone screen is hidden, all streams close, so the servers go idle.
@@ -64,7 +79,7 @@ and add the other PCs from there.
 A WinForms app that ships with .NET, so it adds no dependency. Installed to start at logon with administrator
 rights (it needs them to read the admin key and to manage the service and drivers). The icon colour shows overall
 health. Its window shows server info, the sign-in password state, and the component table with Check / Update
-selected / Update all.
+selected / Update all. **Set up phone…** shows the QR code for the phone setup page.
 
 ## Updater (`src/Syscom.Updater`)
 
@@ -85,6 +100,7 @@ C:\Program Files\SYSCOM\
 C:\ProgramData\SYSCOM\          (SYSTEM + Administrators only)
   config.json     name, ports, password hash, token secret, update feed URL
   admin.key       shared secret for the tray app
+  tls\            ca.pfx / ca.crt (this PC's CA), server.pfx (current HTTPS certificate)
   updates\        staging, backups, updater logs, last-result.json
 ```
 
@@ -97,5 +113,7 @@ folder, so the updater can drop in a newer LibreHardwareMonitor and its dependen
 | --- | --- | --- |
 | 47810 | TCP | Dashboard, REST API, WebSocket |
 | 47811 | UDP | LAN discovery broadcasts |
+| 47812 | TCP | Dashboard, REST API, WebSocket over HTTPS (optional, `HttpsEnabled`) |
 
-Both can be changed in `config.json` (`Port`, `DiscoveryPort`) or with `install.ps1 -Port … -DiscoveryPort …`.
+All can be changed in `config.json` (`Port`, `DiscoveryPort`, `HttpsPort`) or with
+`install.ps1 -Port … -DiscoveryPort … -HttpsPort …`.

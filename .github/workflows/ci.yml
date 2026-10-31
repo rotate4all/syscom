@@ -51,3 +51,9 @@ jobs:
           curl -sf localhost:47810/ | grep -q "<title>SYSCOM</title>"
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/sensors)" = "401"
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/admin/components)" = "403"
+          curl -sf localhost:47810/trust | grep -q "Install SYSCOM as an app"
+          # HTTPS with the server's own CA (name-constrained to local names and private addresses)
+          curl -sf localhost:47810/tls/syscom-ca.crt -o "$RUNNER_TEMP/ca.der"
+          openssl x509 -inform der -in "$RUNNER_TEMP/ca.der" -out "$RUNNER_TEMP/ca.pem"
+          curl -sf --cacert "$RUNNER_TEMP/ca.pem" https://localhost:47812/api/health
+          curl -sf localhost:47810/tls/syscom.mobileconfig | grep -q "com.apple.security.root"

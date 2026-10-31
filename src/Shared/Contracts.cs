@@ -51,7 +51,9 @@ public sealed record ServerStatus(
     int Sensors,
     bool RunningAsService,
     string? UpdateFeedUrl,
-    UpdateResult? LastUpdate);
+    UpdateResult? LastUpdate,
+    int? HttpsPort,
+    string? CaFingerprint);
 
 /// <summary>Instructions for syscom-updater: replace files in the install folder, restart, verify, roll back on failure.</summary>
 public sealed record UpdatePlan(

@@ -7,13 +7,18 @@ no cookies; auth is a bearer token.
 
 | Method | Path | Auth | Response |
 | --- | --- | --- | --- |
-| GET | `/api/info` | none | `{ id, name, version, os, minIntervalMs, sources[] }` |
+| GET | `/api/info` | none | `{ id, name, version, os, minIntervalMs, port, httpsPort, caFingerprint, caName, sources[] }`. `httpsPort` and the CA fields are `null` when HTTPS is off. |
 | GET | `/api/health` | none | `{ status: "ok", version, sensors }`, used by the updater and installer |
 | POST | `/api/login` | none | body `{ password }` → `{ token, expiresInDays }`. `401` wrong password. `429` + `Retry-After` when locked out (5 failures → 15 s, doubling, max 5 min). |
 | GET | `/api/sensors` | bearer | `[ { id, name, hardware, hardwareType, type, unit } ]` |
-| GET | `/api/peers` | bearer | other SYSCOM servers heard on the LAN: `[ { id, name, url } ]` |
+| GET | `/api/peers` | bearer | other SYSCOM servers heard on the LAN: `[ { id, name, url, httpsUrl } ]` (`httpsUrl` is `null` when that PC has HTTPS off) |
 | GET | `/ws?token=…` | token in query | live stream, see below |
+| GET | `/tls/syscom-ca.crt` | none | this PC's CA certificate (DER), for Android, Windows and Mac |
+| GET | `/tls/syscom.mobileconfig` | none | the same CA as an iOS configuration profile |
+| GET | `/trust` | none | phone setup page (trust the CA, open the HTTPS dashboard, install the app) |
 | GET | `/*` | none | web dashboard |
+
+Everything is served on both ports: HTTP (`Port`, 47810) and HTTPS (`HttpsPort`, 47812).
 
 ## WebSocket stream (`/ws`)
 
@@ -50,7 +55,7 @@ Fps `FPS`.
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `/api/admin/status` | | `ServerStatus`: name, version, port, urls, clients, sensors, runningAsService, updateFeedUrl, lastUpdate |
+| GET | `/api/admin/status` | | `ServerStatus`: name, version, port, urls, clients, sensors, runningAsService, updateFeedUrl, lastUpdate, httpsPort, caFingerprint |
 | GET | `/api/admin/components` | | `ComponentStatus[]` |
 | POST | `/api/admin/components/check` | | checks every source, returns `ComponentStatus[]` |
 | POST | `/api/admin/components/update` | `{ ids: ["lhm", …] }` (empty = all available) | `{ message }` |

@@ -8,9 +8,10 @@ using Syscom.Server.Config;
 
 namespace Syscom.Server.Discovery;
 
-public sealed record Peer(string Id, string Name, string Address, int Port, DateTime LastSeen)
+public sealed record Peer(string Id, string Name, string Address, int Port, int? HttpsPort, DateTime LastSeen)
 {
     public string Url => $"http://{Address}:{Port}";
+    public string? HttpsUrl => HttpsPort is { } p ? $"https://{Address}:{p}" : null;
 }
 
 /// <summary>
@@ -65,6 +66,7 @@ public sealed class LanDiscovery : BackgroundService
         var message = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
             app = App, v = 1, id = _cfg.Id, name = _cfg.Name, port = _cfg.Port,
+            httpsPort = _cfg.HttpsEnabled ? _cfg.HttpsPort : (int?)null,
         }));
 
         using var timer = new PeriodicTimer(AnnounceEvery);
@@ -98,8 +100,9 @@ public sealed class LanDiscovery : BackgroundService
                 if (string.IsNullOrEmpty(id) || id == _cfg.Id) continue;
                 var name = root.GetProperty("name").GetString() ?? id;
                 var port = root.GetProperty("port").GetInt32();
+                int? httpsPort = root.TryGetProperty("httpsPort", out var hp) && hp.ValueKind == JsonValueKind.Number ? hp.GetInt32() : null;
                 var isNew = !_peers.ContainsKey(id);
-                _peers[id] = new Peer(id, name, result.RemoteEndPoint.Address.ToString(), port, DateTime.UtcNow);
+                _peers[id] = new Peer(id, name, result.RemoteEndPoint.Address.ToString(), port, httpsPort, DateTime.UtcNow);
                 if (isNew) _log.LogInformation("Discovered SYSCOM server {Name} at {Address}:{Port}", name, result.RemoteEndPoint.Address, port);
             }
             catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)

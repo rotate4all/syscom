@@ -54,13 +54,18 @@ function onData(dev, frame) {
 async function addDevice(url, { quiet = false } = {}) {
   const normalized = normalizeUrl(url);
   const probe = new Connection({ url: normalized, widgets: [] });
+  probe.device.httpsPort = normalized.startsWith('https:') ? Number(new URL(normalized).port) : null;
   const info = await probe.info();
-  const existing = state.devices.find((d) => d.serverId === info.id || d.url === normalized);
+  // Store the plain HTTP address plus the HTTPS port; the connection picks whichever this page needs.
+  const host = new URL(normalized).hostname;
+  const httpUrl = `http://${host}:${info.port || 47810}`;
+  const existing = state.devices.find((d) => d.serverId === info.id || d.url === httpUrl);
   if (existing) {
+    if (info.httpsPort && existing.httpsPort !== info.httpsPort) { existing.httpsPort = info.httpsPort; persist(); }
     if (!quiet) goTo(state.devices.indexOf(existing));
     return existing;
   }
-  const dev = normalizeDevice({ key: uid(), serverId: info.id, url: normalized, name: info.name });
+  const dev = normalizeDevice({ key: uid(), serverId: info.id, url: httpUrl, httpsPort: info.httpsPort, name: info.name });
   state.devices.push(dev);
   persist();
   renderPages();
@@ -385,7 +390,7 @@ function renderSettings() {
     const li = document.createElement('li');
     li.innerHTML = `
       <span class="dot ${conn?.status || 'idle'}"></span>
-      <span class="grow"><input class="name" value="${escapeHtml(dev.name)}" aria-label="Device name"><span class="sub">${escapeHtml(dev.url)}</span></span>
+      <span class="grow"><input class="name" value="${escapeHtml(dev.name)}" aria-label="Device name"><span class="sub">${escapeHtml(conn?.base || dev.url)}${conn?.secure ? ' · secure' : ''}</span></span>
       <label class="interval">Every <input type="number" min="${MIN_INTERVAL}" step="100" value="${dev.interval}"> ms</label>
       <button data-a="up" title="Move up">↑</button>
       ${dev.token ? '<button data-a="logout">Sign out</button>' : ''}
@@ -409,6 +414,21 @@ function renderSettings() {
     list.append(li);
   });
   renderPeers();
+  renderAppInstall();
+}
+
+function renderAppInstall() {
+  const box = $('#app-install');
+  const dev = state.devices[active];
+  if (location.protocol === 'https:') {
+    box.innerHTML = '<p class="hint"><strong>Secure connection.</strong> Add this page to your home screen to use SYSCOM as an app.</p>';
+  } else if (dev?.httpsPort) {
+    const trust = new URL('/trust', dev.url).href;
+    box.innerHTML = `<p class="hint">To install SYSCOM as an app on this phone, trust this PC's certificate once.</p>
+      <div class="inline"><a class="ghost button" href="${escapeHtml(trust)}">Set up app install</a></div>`;
+  } else {
+    box.innerHTML = '<p class="hint">HTTPS is turned off on this PC, so the dashboard can only be added as a browser shortcut.</p>';
+  }
 }
 
 async function renderPeers() {
@@ -416,7 +436,13 @@ async function renderPeers() {
   const known = new Set(state.devices.map((d) => d.serverId));
   const seen = new Map();
   await Promise.all([...conns.values()].map(async (c) => {
-    try { for (const p of await c.peers()) if (!known.has(p.id)) seen.set(p.id, p); } catch { /* offline */ }
+    try {
+      for (const p of await c.peers()) {
+        // From an HTTPS dashboard only HTTPS peers are reachable.
+        const url = location.protocol === 'https:' ? p.httpsUrl : p.url;
+        if (!known.has(p.id) && url) seen.set(p.id, { ...p, url });
+      }
+    } catch { /* offline */ }
   }));
   list.replaceChildren();
   for (const p of seen.values()) {

@@ -6,7 +6,7 @@
   - copies SYSCOM (with its private .NET runtime) to Program Files
   - installs or updates the PawnIO driver when the bundled one is newer than what's installed
   - registers the "SYSCOM" Windows service (starts at boot, restarts on failure)
-  - opens the dashboard port (TCP) and discovery port (UDP) for private networks
+  - opens the dashboard ports (TCP, HTTP and HTTPS) and discovery port (UDP) for private networks
   - starts the tray app at every logon, with administrator rights, so it can manage updates
 #>
 [CmdletBinding()]
@@ -14,6 +14,7 @@ param(
     [string]$InstallDir = (Join-Path $env:ProgramFiles 'SYSCOM'),
     [int]$Port = 47810,
     [int]$DiscoveryPort = 47811,
+    [int]$HttpsPort = 47812,
     [switch]$SkipPawnIO,
     [switch]$NoTray
 )
@@ -25,7 +26,7 @@ $service = 'SYSCOM'
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host 'Restarting as administrator…'
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -InstallDir `"$InstallDir`" -Port $Port -DiscoveryPort $DiscoveryPort$(if ($SkipPawnIO) {' -SkipPawnIO'})$(if ($NoTray) {' -NoTray'})"
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -InstallDir `"$InstallDir`" -Port $Port -DiscoveryPort $DiscoveryPort -HttpsPort $HttpsPort$(if ($SkipPawnIO) {' -SkipPawnIO'})$(if ($NoTray) {' -NoTray'})"
     exit
 }
 if (-not (Test-Path (Join-Path $source 'syscom.exe'))) { throw "Run this script from the extracted SYSCOM package folder." }
@@ -79,11 +80,12 @@ if (-not (Get-Service $service -ErrorAction SilentlyContinue)) {
 
 # Ports live in %ProgramData%\SYSCOM\config.json (created on first start with defaults).
 $configFile = Join-Path $env:ProgramData 'SYSCOM\config.json'
-if ($Port -ne 47810 -or $DiscoveryPort -ne 47811 -or (Test-Path $configFile)) {
+if ($Port -ne 47810 -or $DiscoveryPort -ne 47811 -or $HttpsPort -ne 47812 -or (Test-Path $configFile)) {
     New-Item -ItemType Directory -Force -Path (Split-Path $configFile) | Out-Null
     $config = if (Test-Path $configFile) { Get-Content $configFile -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
     $config | Add-Member -NotePropertyName Port -NotePropertyValue $Port -Force
     $config | Add-Member -NotePropertyName DiscoveryPort -NotePropertyValue $DiscoveryPort -Force
+    $config | Add-Member -NotePropertyName HttpsPort -NotePropertyValue $HttpsPort -Force
     $config | ConvertTo-Json | Set-Content $configFile -Encoding utf8
 }
 
@@ -91,6 +93,7 @@ if ($Port -ne 47810 -or $DiscoveryPort -ne 47811 -or (Test-Path $configFile)) {
 Step 'Firewall (private networks only)'
 Get-NetFirewallRule -DisplayName 'SYSCOM*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 New-NetFirewallRule -DisplayName 'SYSCOM dashboard' -Direction Inbound -Protocol TCP -LocalPort $Port -Profile Private -Action Allow -Program $exe | Out-Null
+New-NetFirewallRule -DisplayName 'SYSCOM dashboard (HTTPS)' -Direction Inbound -Protocol TCP -LocalPort $HttpsPort -Profile Private -Action Allow -Program $exe | Out-Null
 New-NetFirewallRule -DisplayName 'SYSCOM discovery' -Direction Inbound -Protocol UDP -LocalPort $DiscoveryPort -Profile Private -Action Allow -Program $exe | Out-Null
 
 # ---------------------------------------------------------------- tray app at logon
@@ -119,5 +122,6 @@ $ips = Get-NetIPAddress -AddressFamily IPv4 -PrefixOrigin Dhcp, Manual -ErrorAct
 Write-Host ''
 Write-Host 'SYSCOM is installed.' -ForegroundColor Green
 foreach ($ip in $ips) { Write-Host "  Dashboard:  http://${ip}:$Port" }
+if ($ips) { Write-Host "  Phone app:  http://$(@($ips)[0]):$Port/trust  (or tray icon > Set up phone)" }
 if (Test-Path $pwFile) { Write-Host "  Password:   $(Get-Content $pwFile)  (change it from the tray app)" }
 Write-Host '  Manage it from the SYSCOM icon in the notification area.'

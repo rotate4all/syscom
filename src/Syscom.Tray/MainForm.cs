@@ -50,13 +50,19 @@ internal sealed class MainForm : Form
         var right = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
         var open = new Button { Text = "Open dashboard", AutoSize = true };
         open.Click += (_, _) => Process.Start(new ProcessStartInfo(_client.DashboardUrl) { UseShellExecute = true });
+        var phone = new Button { Text = "Set up phone…", AutoSize = true };
+        phone.Click += async (_, _) =>
+        {
+            try { await PhoneSetupForm.ShowAsync(_client); }
+            catch (Exception ex) { _status.Text = ex.Message; }
+        };
         var pwd = new Button { Text = "Change password…", AutoSize = true };
         pwd.Click += async (_, _) => await ChangePasswordAsync();
         var restart = new Button { Text = "Restart server", AutoSize = true };
         restart.Click += async (_, _) => await RunAsync(() => _client.RestartAsync());
         var data = new Button { Text = "Open data folder", AutoSize = true };
         data.Click += (_, _) => Process.Start(new ProcessStartInfo(SyscomPaths.DataDir) { UseShellExecute = true });
-        right.Controls.AddRange(new Control[] { open, pwd, restart, data });
+        right.Controls.AddRange(new Control[] { open, phone, pwd, restart, data });
         header.Controls.Add(left, 0, 0);
         header.Controls.Add(right, 1, 0);
 

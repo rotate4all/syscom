@@ -39,7 +39,7 @@ public static class WebClient
         {
             path = string.IsNullOrEmpty(path) ? "index.html" : path.Replace('\\', '/');
             var asset = Find(path);
-            if (asset is null && !Path.HasExtension(path)) asset = Find("index.html"); // app-shell fallback
+            if (asset is null && !Path.HasExtension(path)) asset = Find(path + ".html") ?? Find("index.html"); // /trust → trust.html, else app shell
             if (asset is null) return Results.NotFound();
 
             if (ctx.Request.Headers.IfNoneMatch == asset.ETag) return Results.StatusCode(StatusCodes.Status304NotModified);

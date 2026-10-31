@@ -103,4 +103,5 @@ zips somewhere reachable and point `UpdateFeedUrl` at it.
 | `PawnIoInstallArgs` | `-install -silent` | arguments for the PawnIO setup |
 | `MinIntervalMs` | `500` | fastest polling a browser may request |
 | `Port` / `DiscoveryPort` | `47810` / `47811` | |
+| `HttpsEnabled` / `HttpsPort` | `true` / `47812` | HTTPS with this PC's own certificate (needed to install the phone app) |
 | `DiscoveryEnabled` | `true` | LAN broadcasts |

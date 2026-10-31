@@ -28,7 +28,7 @@ component by component.
 ## Features
 
 - **Server-only, any browser as the client.** Each PC runs SYSCOM, and any device on the network opens
-  `http://<pc>:47810`. Nothing to install on phones.
+  `http://<pc>:47810`. Nothing to install on phones, though you can install the dashboard as an app.
 - **Many PCs, one dashboard.** Add every SYSCOM machine you own and swipe between them. SYSCOM servers find each
   other on the LAN automatically.
 - **A configurable dashboard per PC.** Gauges, bars, live graphs and big numbers. Add, remove, reorder and resize
@@ -37,7 +37,9 @@ component by component.
   FPS).
 - **Polling you control:** 1 s by default, down to 500 ms, set per PC. Servers only read hardware while someone is
   watching.
-- **Light, dark or automatic theme.** Installable as a home-screen web app.
+- **Light, dark or automatic theme.**
+- **Installable phone app.** Scan a QR code from the tray app; the phone trusts that PC's own certificate once and
+  installs the dashboard as an app over HTTPS. No cloud account, no public domain.
 - **Password sign-in** per PC, with signed tokens and lockout after repeated failures.
 - **Monitoring only.** No fan control, no overclocking, nothing that writes to your hardware.
 - **A tray app** that shows the health of every component, checks for updates and installs them with one click,
@@ -68,7 +70,7 @@ appears depends on your hardware.
    printed password. Change it from the SYSCOM tray icon.
 
 The installer puts SYSCOM in `C:\Program Files\SYSCOM`, registers the **SYSCOM** Windows service, opens TCP 47810
-and UDP 47811 on private networks only, installs or updates the PawnIO driver if needed, and starts the tray app at
+(HTTP), TCP 47812 (HTTPS) and UDP 47811 on private networks only, installs or updates the PawnIO driver if needed, and starts the tray app at
 logon. Remove it with `uninstall.ps1` in the same folder.
 
 **Requirements:** Windows 10/11 x64. Nothing else: the .NET runtime is bundled in the package.
@@ -93,16 +95,28 @@ yours if it's older. The tray app warns you if PawnIO is ever missing or older t
 - **Polling:** Settings → per device, *Every … ms* (minimum 500).
 - **Backup:** Settings → *Export layout* saves your dashboards to a file you can import in another browser.
 
-### Put it on your home screen
+### Install it as a phone app
 
-The dashboard is a web app with its own icon and a full-screen window.
+Phones only install web apps from secure (HTTPS) addresses, and a PC at home has no public certificate. So each
+SYSCOM PC creates its own small certificate authority, and your phone trusts it once:
 
-- **iPhone / iPad (Safari):** Share → *Add to Home Screen*. It opens full screen like a native app.
-- **Android (Chrome):** ⋮ → *Add to Home screen*. Over plain HTTP, Chrome creates a shortcut that opens in the
-  browser. A full install (own window, app drawer entry) needs HTTPS, which browsers require for installable apps.
+1. On the PC: SYSCOM tray icon → **Set up phone…**, and scan the QR code with the phone's camera.
+2. The setup page that opens (`http://<pc>:47810/trust`) downloads the certificate and shows the steps for your
+   phone: iPhone/iPad, Android, Windows or Mac. Its fingerprint matches the one in the tray window.
+3. Tap **Open secure dashboard** (`https://<pc>:47812`), sign in, then *Add to Home Screen* (iPhone) or
+   *Install app* (Android).
 
-Layouts are stored in the browser you use. Open the dashboard from the same PC address each time (bookmark it or
-add it to your home screen) and all your devices and layouts will be there.
+The certificate is name-constrained to private network addresses, `localhost`, `*.local` and the PC's own name, so
+it can't vouch for any other website. The PC renews its HTTPS certificate by itself when its address changes, and the
+phone doesn't need to do anything again. Monitoring several PCs from the app: trust each PC once from its own setup
+page. The secure dashboard then talks to every PC over HTTPS.
+
+Without the certificate, *Add to Home Screen* still works over plain HTTP: iPhone opens it full screen, Android
+creates a shortcut that opens in Chrome.
+
+Layouts are stored per browser and per address (HTTP and HTTPS count as different addresses). Open the dashboard
+from the same PC address each time and all your devices and layouts will be there. Settings → *Export* / *Import*
+moves them between addresses.
 
 ## Updating
 
@@ -145,7 +159,6 @@ and edit `web/` with no build step. See [docs/BUILDING.md](docs/BUILDING.md).
 
 - FPS for every GPU vendor from Windows' graphics kernel present events (the same source PresentMon and FrameView
   use). No injection into games, so it's anti-cheat safe.
-- Optional HTTPS for the dashboard.
 - Per-widget history length and min/max markers on graphs.
 
 ## Credits and license

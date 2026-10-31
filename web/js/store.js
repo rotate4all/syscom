@@ -23,6 +23,7 @@ export function normalizeDevice(d) {
     key: d.key || uid(),
     serverId: d.serverId || null,
     url: d.url,
+    httpsPort: Number(d.httpsPort) || null,
     name: d.name || d.url,
     token: d.token || null,
     interval: Math.max(MIN_INTERVAL, Number(d.interval) || DEFAULT_INTERVAL),
@@ -41,11 +42,11 @@ export function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
 
-/** "192.168.1.5" → "http://192.168.1.5:47810" */
-export function normalizeUrl(input) {
+/** "192.168.1.5" → "http://192.168.1.5:47810" (or https://…:47812 when the dashboard itself is on HTTPS) */
+export function normalizeUrl(input, secure = location.protocol === 'https:') {
   let s = String(input).trim().replace(/\/+$/, '');
-  if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+  if (!/^https?:\/\//i.test(s)) s = (secure ? 'https://' : 'http://') + s;
   const u = new URL(s);
-  if (!u.port && u.protocol === 'http:') u.port = '47810';
+  if (!u.port) u.port = u.protocol === 'https:' ? '47812' : '47810';
   return u.origin;
 }

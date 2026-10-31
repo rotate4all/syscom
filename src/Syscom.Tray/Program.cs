@@ -30,6 +30,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open dashboard", null, (_, _) => OpenDashboard());
+        menu.Items.Add("Set up phone…", null, async (_, _) => await Try(async () => { await PhoneSetupForm.ShowAsync(_client); return ""; }));
         menu.Items.Add("Manage SYSCOM…", null, (_, _) => ShowWindow());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Check for updates", null, async (_, _) => { ShowWindow(); await _form!.CheckForUpdatesAsync(); });

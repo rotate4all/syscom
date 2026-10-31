@@ -9,6 +9,10 @@ public sealed class ServerConfig
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = Environment.MachineName;
     public int Port { get; set; } = 47810;
+
+    /// <summary>Also serve the dashboard over HTTPS with this PC's own certificate (see /trust).</summary>
+    public bool HttpsEnabled { get; set; } = true;
+    public int HttpsPort { get; set; } = 47812;
     public bool DiscoveryEnabled { get; set; } = true;
     public int DiscoveryPort { get; set; } = 47811;
 

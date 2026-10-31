@@ -13,5 +13,9 @@ All notable changes are listed here. Versions follow [semantic versioning](https
 - Component management: health and update checks for SYSCOM, web dashboard, LibreHardwareMonitor, PawnIO and
   the .NET runtime. One-click updates with checksum verification, backup and automatic rollback.
 - Tray app (`syscom-tray.exe`): health icon, update notifications, component table, password change, restart.
+- Installable phone app: the dashboard is a PWA (manifest, icons, offline shell). Optional HTTPS on port 47812 with
+  each PC's own name-constrained certificate authority and an auto-renewed server certificate, a phone setup page
+  (`/trust`, iOS profile or certificate download with per-platform steps), and a QR code for it in the tray app
+  (**Set up phone…**). A dashboard opened over HTTPS talks HTTPS to every PC.
 - Packaging: `build\package.ps1` (full package with bundled runtime and PawnIO, update assets, feed.json),
   `install.ps1` / `uninstall.ps1`, CI and release workflows.

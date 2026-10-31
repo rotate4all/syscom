@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Set up SYSCOM app</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="app.css">
+  <style>
+    body { overflow: auto; height: auto; min-height: 100dvh; }
+    main.trust { max-width: 560px; margin: 0 auto; padding: calc(env(safe-area-inset-top) + 20px) 16px 40px; display: grid; gap: 14px; }
+    .trust h1 { font-size: 22px; margin: 0; display: flex; align-items: center; gap: 10px; }
+    .trust h1 img { width: 34px; height: 34px; border-radius: 8px; }
+    .trust p { margin: 0; color: var(--muted); }
+    .step { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 10px; }
+    .step h2 { margin: 0; font-size: 16px; display: flex; gap: 10px; align-items: center; }
+    .step h2 .n { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 12px; background: var(--accent); color: #fff; font-size: 13px; flex: none; }
+    .step ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+    .step .done { color: var(--ok); font-weight: 600; }
+    .step .bad { color: var(--bad); font-weight: 600; }
+    code.fp { font-size: 12px; word-break: break-all; color: var(--muted); }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tabs button { border: 1px solid var(--line); background: var(--surface-2); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+    .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    main [data-os] { display: none; }
+    body[data-os="ios"] main [data-os~="ios"], body[data-os="android"] main [data-os~="android"],
+    body[data-os="windows"] main [data-os~="windows"], body[data-os="mac"] main [data-os~="mac"] { display: block; }
+    a.primary { text-decoration: none; display: inline-flex; justify-content: center; padding: 10px 16px; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main class="trust">
+    <h1><img src="icons/icon-192.png" alt="">Install SYSCOM as an app</h1>
+    <p>Phones only install web apps from secure (HTTPS) addresses. <strong id="pc">This PC</strong> has its own
+      certificate. Trust it once on this device, then open the secure dashboard and add it to your home screen.</p>
+
+    <div class="tabs" id="tabs">
+      <button data-pick="ios">iPhone / iPad</button>
+      <button data-pick="android">Android</button>
+      <button data-pick="windows">Windows</button>
+      <button data-pick="mac">Mac</button>
+    </div>
+
+    <section class="step" id="already" hidden>
+      <h2><span class="n">✓</span>This device already trusts this PC</h2>
+      <p>You're on the secure address. Add it to your home screen (step 4) if you haven't yet.</p>
+    </section>
+
+    <section class="step">
+      <h2><span class="n">1</span>Download the certificate</h2>
+      <div data-os="ios"><a class="primary" href="tls/syscom.mobileconfig">Download profile</a></div>
+      <div data-os="android windows mac"><a class="primary" href="tls/syscom-ca.crt" download>Download certificate</a></div>
+      <p>Fingerprint (SHA-256), to compare with the SYSCOM tray app on the PC:<br><code class="fp" id="fp">…</code></p>
+    </section>
+
+    <section class="step">
+      <h2><span class="n">2</span>Trust it</h2>
+      <ol data-os="ios">
+        <li>Tap <b>Allow</b>, then open <b>Settings</b> and tap <b>Profile Downloaded</b> → <b>Install</b>.</li>
+        <li>Go to <b>Settings → General → About → Certificate Trust Settings</b>.</li>
+        <li>Turn on <b id="caname1">SYSCOM Local CA</b>.</li>
+      </ol>
+      <ol data-os="android">
+        <li>Open <b>Settings</b> and search for <b>CA certificate</b> (usually under Security → More security settings → Encryption &amp; credentials → Install a certificate).</li>
+        <li>Choose <b>CA certificate</b> → <b>Install anyway</b>, and pick the file you just downloaded.</li>
+      </ol>
+      <ol data-os="windows">
+        <li>Open the downloaded file → <b>Install Certificate…</b> → <b>Local Machine</b>.</li>
+        <li>Choose <b>Place all certificates in the following store</b> → <b>Trusted Root Certification Authorities</b> → Finish.</li>
+        <li>Restart the browser.</li>
+      </ol>
+      <ol data-os="mac">
+        <li>Open the downloaded file; it's added to <b>Keychain Access</b>.</li>
+        <li>Double-click <b id="caname2">SYSCOM Local CA</b> → <b>Trust</b> → <b>Always Trust</b>.</li>
+      </ol>
+      <p>The certificate can only vouch for this PC on your local network. It can't be used for any other website.</p>
+    </section>
+
+    <section class="step">
+      <h2><span class="n">3</span>Open the secure dashboard</h2>
+      <p id="check">Checking…</p>
+      <div><a class="primary" id="open" href="#">Open secure dashboard</a></div>
+    </section>
+
+    <section class="step">
+      <h2><span class="n">4</span>Add it to your home screen</h2>
+      <p data-os="ios">In Safari, tap <b>Share</b> → <b>Add to Home Screen</b>.</p>
+      <p data-os="android">In Chrome, tap <b>⋮</b> → <b>Install app</b> (or <b>Add to Home screen</b> → Install).</p>
+      <p data-os="windows mac">In Chrome or Edge, click the install icon in the address bar.</p>
+      <p>Using several PCs? Repeat steps 1–2 on this device for each one, from its own setup page. Your existing
+        dashboard layouts can be moved with Settings → Export / Import.</p>
+    </section>
+  </main>
+
+  <script type="module">
+    const ua = navigator.userAgent;
+    const detected = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) ? 'ios'
+      : /Android/.test(ua) ? 'android' : /Mac OS X/.test(ua) ? 'mac' : 'windows';
+    const pick = (os) => {
+      document.body.dataset.os = os;
+      document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.pick === os));
+    };
+    pick(detected);
+    document.getElementById('tabs').addEventListener('click', (e) => { const os = e.target.dataset.pick; if (os) pick(os); });
+
+    const info = await fetch('api/info', { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
+    const check = document.getElementById('check');
+    const open = document.getElementById('open');
+    if (!info) { check.textContent = 'Could not reach SYSCOM.'; }
+    else if (!info.httpsPort) { check.innerHTML = '<span class="bad">HTTPS is turned off on this PC.</span>'; open.hidden = true; }
+    else {
+      document.getElementById('pc').textContent = info.name;
+      document.getElementById('fp').textContent = info.caFingerprint.match(/.{1,4}/g).join(' ');
+      for (const id of ['caname1', 'caname2']) document.getElementById(id).textContent = info.caName || 'SYSCOM Local CA';
+      const secure = `https://${location.hostname}:${info.httpsPort}/`;
+      open.href = secure;
+      if (location.protocol === 'https:') document.getElementById('already').hidden = false;
+
+      const test = async () => {
+        try {
+          const r = await fetch(secure + 'api/health', { cache: 'no-store' });
+          if (!r.ok) throw new Error();
+          check.innerHTML = '<span class="done">✓ This device trusts the certificate.</span>';
+          return true;
+        } catch {
+          check.innerHTML = '<span class="bad">Not trusted yet.</span> Finish steps 1–2, then come back to this page.';
+          return false;
+        }
+      };
+      if (!(await test())) {
+        // Re-check when the user comes back from Settings.
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') test(); });
+      }
+    }
+  </script>
+</body>
+</html>

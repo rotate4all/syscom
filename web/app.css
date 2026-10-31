@@ -42,6 +42,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   display: flex;
@@ -161,11 +162,11 @@ input, select {
   width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); outline-color: var(--accent);
 }
 input[type="color"] { padding: 2px; height: 38px; width: 52px; flex: none; }
-button.primary, button.ghost, label.button {
+button.primary, button.ghost, label.button, a.button {
   display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 10px; cursor: pointer; font-weight: 600; white-space: nowrap;
 }
 button.primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
-button.ghost, label.button { border: 1px solid var(--line); background: var(--surface-2); }
+button.ghost, label.button, a.button { text-decoration: none; color: inherit; border: 1px solid var(--line); background: var(--surface-2); }
 .error { color: var(--bad); margin: 6px 0 0; font-size: 13px; }
 .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
 
