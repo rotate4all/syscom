@@ -328,7 +328,7 @@ $('#btn-edit').onclick = () => {
 const dlgWidget = $('#dlg-widget');
 let editTarget = null;
 
-// Pills: which part of the PC, then which kind of reading. Keeps the sensor list short.
+// Tabs for which part of the PC, pills under them for which kind of reading. Keeps the sensor list short.
 const DEVICE_CATS = [
   ['cpu', 'CPU', (s) => s.hardwareType === 'Cpu'],
   ['gpu', 'GPU', (s) => s.hardwareType.startsWith('Gpu')],
@@ -363,39 +363,66 @@ function openWidgetEditor(dev, widget) {
   $('#w-search').value = '';
   const current = widget && conn.sensors.get(widget.sensor);
   if (current) { pick.dev = deviceCat(current); pick.read = readingCat(current); }
-  else { pick.dev = DEVICE_CATS.find(([, , test]) => conn.catalog.some(test))?.[0] || 'all'; pick.read = 'all'; }
+  else { pick.dev = DEVICE_CATS.find(([, , test]) => conn.catalog.some(test))?.[0] || 'other'; pick.read = 'all'; }
   fillSensorList(conn.catalog, widget?.sensor);
   const sensor = conn.sensors.get($('#w-sensor').value);
   fillWidgetForm(widget || defaultsFor(sensor || conn.catalog[0], conn.catalog), sensor, conn.catalog);
   dlgWidget.showModal();
+  showActiveTab();
 }
 
-function renderPills(host, cats, current, counts, onPick) {
+/** Device tabs (no "All": search covers that) or reading pills (with "All"). Empty categories are left out. */
+function renderChoices(host, cats, current, counts, onPick, { tabs = false } = {}) {
   host.replaceChildren();
   const all = [...counts.values()].reduce((a, b) => a + b, 0);
-  for (const [key, label] of [['all', 'All'], ...cats.map(([k, l]) => [k, l]), ['other', 'Other']]) {
+  const keys = [...(tabs ? [] : [['all', 'All']]), ...cats.map(([k, l]) => [k, l]), ['other', 'Other']];
+  for (const [key, label] of keys) {
     const n = key === 'all' ? all : counts.get(key) || 0;
     if (!n) continue;
     const b = document.createElement('button');
     b.type = 'button';
     b.className = key === current ? 'active' : '';
-    b.setAttribute('aria-pressed', String(key === current));
-    b.innerHTML = `${escapeHtml(label)}<span class="n">${n}</span>`;
+    if (tabs) { b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(key === current)); b.title = `${n} sensors`; b.textContent = label; }
+    else { b.setAttribute('aria-pressed', String(key === current)); b.innerHTML = `${escapeHtml(label)}<span class="n">${n}</span>`; }
     b.onclick = () => onPick(key);
     host.append(b);
   }
+  if (tabs) showActiveTab();
 }
+
+/** Keeps the chosen tab in view and fades the row's ends when more tabs are hidden past them. */
+function showActiveTab() {
+  const tabs = $('#w-dev');
+  tabs.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  tabEdges();
+}
+function tabEdges() {
+  const tabs = $('#w-dev');
+  const picker = $('#w-picker');
+  picker.style.setProperty('--tabs-h', `${tabs.offsetHeight}px`);
+  picker.classList.toggle('more-l', tabs.scrollLeft > 2);
+  picker.classList.toggle('more-r', tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 2);
+}
+$('#w-dev').addEventListener('scroll', tabEdges, { passive: true });
+// A mouse wheel scrolls the tab row sideways when it doesn't fit.
+$('#w-dev').addEventListener('wheel', (e) => {
+  const tabs = e.currentTarget;
+  if (tabs.scrollWidth <= tabs.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  tabs.scrollLeft += e.deltaY;
+  e.preventDefault();
+}, { passive: false });
+window.addEventListener('resize', () => { if (dlgWidget.open) tabEdges(); });
 
 function fillSensorList(catalog, selectedId) {
   const sel = $('#w-sensor');
   const q = $('#w-search').value.trim().toLowerCase();
   const searching = q.length > 0;
 
-  // Device pills count everything; reading pills count what's in the chosen device.
+  // Device tabs count everything; reading pills count what's in the chosen device.
   const devCounts = new Map();
   for (const s of catalog) devCounts.set(deviceCat(s), (devCounts.get(deviceCat(s)) || 0) + 1);
-  if (pick.dev !== 'all' && !devCounts.get(pick.dev)) pick.dev = 'all';
-  const inDev = catalog.filter((s) => pick.dev === 'all' || deviceCat(s) === pick.dev);
+  if (!devCounts.get(pick.dev)) pick.dev = [...DEVICE_CATS.map(([k]) => k), 'other'].find((k) => devCounts.get(k));
+  const inDev = catalog.filter((s) => deviceCat(s) === pick.dev);
   const readCounts = new Map();
   for (const s of inDev) readCounts.set(readingCat(s), (readCounts.get(readingCat(s)) || 0) + 1);
   if (pick.read !== 'all' && !readCounts.get(pick.read)) pick.read = 'all';
@@ -405,13 +432,12 @@ function fillSensorList(catalog, selectedId) {
     fillSensorList(catalog, null);
     onSensorPicked();
   };
-  renderPills($('#w-dev'), DEVICE_CATS, pick.dev, devCounts, (k) => { pick.dev = k; pick.read = 'all'; repick(); });
-  renderPills($('#w-read'), READING_CATS, pick.read, readCounts, (k) => { pick.read = k; repick(); });
-  $('#w-dev').classList.toggle('searching', searching);
-  $('#w-read').classList.toggle('searching', searching);
+  renderChoices($('#w-dev'), DEVICE_CATS, pick.dev, devCounts, (k) => { pick.dev = k; pick.read = 'all'; repick(); }, { tabs: true });
+  renderChoices($('#w-read'), READING_CATS, pick.read, readCounts, (k) => { pick.read = k; repick(); });
+  $('#w-picker').classList.toggle('searching', searching);
   $('#w-read').hidden = searching || readCounts.size < 2;
 
-  // Searching looks through every sensor; otherwise the pills decide.
+  // Searching looks through every sensor; otherwise the tab and pill decide.
   const list = searching
     ? catalog.filter((s) => q.split(/\s+/).every((part) => `${s.hardware} ${s.name} ${s.type}`.toLowerCase().includes(part)))
     : inDev.filter((s) => pick.read === 'all' || readingCat(s) === pick.read);

@@ -186,15 +186,42 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .field { display: grid; gap: 6px; font-size: 13px; color: var(--muted); min-width: 0; }
 .field input, .field select { color: var(--text); font-size: 15px; }
 #w-sensor { height: auto; }
+/* Sensor picker: device tabs; the active tab opens onto a panel with its reading filters and sensors. */
+#dlg-widget { width: min(600px, 100%); }   /* room for a full row of device tabs on a desktop */
+.picker { display: grid; position: relative; }
+.tabs {
+  display: flex; gap: 2px; padding: 0 2px; overflow-x: auto; scrollbar-width: none;
+  box-shadow: inset 0 -1px var(--line);   /* the baseline; painted under the tabs so the active one covers it */
+}
+.tabs::-webkit-scrollbar { display: none; }
+/* Fades at the ends of the tab row when more tabs are scrolled out of view (phones). */
+.picker::before, .picker::after {
+  content: ""; position: absolute; top: 0; width: 28px; height: calc(var(--tabs-h, 36px) - 1px);
+  pointer-events: none; opacity: 0; transition: opacity .15s;
+}
+.picker::before { left: 0; background: linear-gradient(to right, var(--surface), transparent); }
+.picker::after { right: 0; background: linear-gradient(to left, var(--surface), transparent); }
+.picker.more-l::before, .picker.more-r::after { opacity: 1; }
+.tabs button {
+  flex: none; padding: 8px 11px; white-space: nowrap; cursor: pointer;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; background: none;
+  color: var(--muted); font-size: 14px; font-weight: 600;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.active { background: var(--surface-2); border-color: var(--line); color: var(--text); }
+.subpanel {
+  display: grid; gap: 10px; padding: 10px; background: var(--surface-2);
+  border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px;
+}
+.subpanel select { background: var(--surface); }
 .pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .pills button {
-  border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 999px;
-  padding: 5px 12px; font-size: 13px; cursor: pointer; line-height: 1.2;
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 999px;
+  padding: 3px 10px; font-size: 12px; cursor: pointer; line-height: 1.3;
 }
-.pills button .n { opacity: .6; font-size: 11px; margin-left: 4px; }
-.pills button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.pills.small button { padding: 3px 10px; font-size: 12px; }
-.pills.searching button.active { background: var(--surface-2); border-color: var(--line); color: var(--text); }
+.pills button .n { opacity: .7; font-size: 11px; margin-left: 4px; }
+.pills button.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.picker.searching .tabs button.active { background: none; border-color: transparent; color: var(--muted); }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .check input { width: auto; }
 .check .hint { margin: 0; }

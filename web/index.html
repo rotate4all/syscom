@@ -45,10 +45,14 @@
 
       <div class="field">
         <span>Sensor</span>
-        <div class="pills" id="w-dev" role="group" aria-label="Device"></div>
-        <div class="pills small" id="w-read" role="group" aria-label="Reading"></div>
         <input type="search" id="w-search" placeholder="Search all sensors…" autocomplete="off" aria-label="Search sensors">
-        <select id="w-sensor" size="6" required aria-label="Sensor"></select>
+        <div class="picker" id="w-picker">
+          <div class="tabs" id="w-dev" role="tablist" aria-label="Device"></div>
+          <div class="subpanel">
+            <div class="pills" id="w-read" role="group" aria-label="Reading"></div>
+            <select id="w-sensor" size="6" required aria-label="Sensor"></select>
+          </div>
+        </div>
       </div>
 
       <div class="row">

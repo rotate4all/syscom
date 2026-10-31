@@ -19,8 +19,8 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   (**Set up phone…**). A dashboard opened over HTTPS talks HTTPS to every PC.
 - Frame rate, frame time and worst frame time for any GPU, from Windows' graphics present events (no injection);
   in the suggested layout.
-- Widget editor: device and reading category pills instead of one long sensor list; GB/MB choice for memory and
-  storage sizes; bars for VRAM, RAM and drive space scale to the live total.
+- Widget editor: device tabs with reading filters nested under the chosen tab, instead of one long sensor list;
+  GB/MB choice for memory and storage sizes; bars for VRAM, RAM and drive space scale to the live total.
 - The dashboard keeps streaming while its tab is in the background, and keeps readings and graph history across
   reconnects.
 - Packaging: `build\package.ps1` (full package with bundled runtime and PawnIO, update assets, feed.json),
