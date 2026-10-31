@@ -47,7 +47,7 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   now show up instead of being missed until a restart. Adding another reading to a card uses the same kind of list (device tabs, search,
   live readings, this card's device first).
 - Percent used for any "X Used" / "X Total" pair, worked out by the server (e.g. "GPU Memory Used" in % on every GPU
-  vendor).
+  vendor), and Total, Free and % for Windows' "D3D Dedicated Memory Used", the VRAM figure Task Manager shows.
 - Each PC stores its own dashboard (`/api/dashboard`), so every browser and phone sees the layout prepared for it;
   changes reach open dashboards right away.
 - History: every sensor is recorded for 30 days (`/api/history`); tapping a card opens a chart with a 1, 3, 7, 14 or

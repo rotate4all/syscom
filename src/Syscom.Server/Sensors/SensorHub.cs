@@ -110,8 +110,15 @@ public sealed class SensorHub : BackgroundService
         {
             var catalog = _sources.SelectMany(s => s.Catalog).ToList();
             _derived.Rebuild(catalog);
-            catalog.AddRange(_derived.Catalog);
-            _catalog = catalog;
+            // Each derived reading right after the one it comes from, so lists show them together.
+            var bySource = _derived.Catalog.ToLookup(d => d.Id[..d.Id.LastIndexOf('/')]);
+            var merged = new List<SensorInfo>(catalog.Count + _derived.Catalog.Count);
+            foreach (var s in catalog)
+            {
+                merged.Add(s);
+                merged.AddRange(bySource[s.Id]);
+            }
+            _catalog = merged;
             Interlocked.Increment(ref _catalogVersion);
         }
         _derived.Update(values);
