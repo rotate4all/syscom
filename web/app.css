@@ -161,7 +161,15 @@ body:not(.editing) .card { cursor: pointer; }
 /* When space runs out the label gives way first (ellipsis), never the number. */
 .card-extra .x-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .card-extra .x-name:not(:empty) { margin-right: .35em; }
+.card-extra .x-q { display: inline-flex; align-items: baseline; flex: none; }
 .card-extra .x-unit:not(:empty) { margin-left: .2em; }
+.card-extra .u-left .x-q { flex-direction: row-reverse; }
+.card-extra .u-left .x-unit:not(:empty) { margin: 0 .2em 0 0; }
+.card-extra .u-above .x-q, .card-extra .u-below .x-q { flex-direction: column; align-items: center; line-height: 1; }
+.card-extra .u-above .x-q { flex-direction: column-reverse; }
+.card-extra .u-above .x-unit:not(:empty), .card-extra .u-below .x-unit:not(:empty) { margin: 0; font-size: .62em; }
+.card-extra .u-none .x-unit { display: none; }
+.card-extra .u-above, .card-extra .u-below { align-items: center; }
 /* Value-only readings share a line: left corner, center, right corner. With something in the center, the sides get
    equal columns so it stays centered; otherwise the corners share the width as they need. */
 .card-extra .x-line { display: flex; justify-content: space-between; align-items: baseline; gap: 0 12px; overflow: hidden; }
@@ -250,8 +258,24 @@ body:not(.editing) .card { cursor: pointer; }
 .graph { display: flex; flex-direction: column; gap: 2px; }
 .graph .readout { font-size: clamp(14px, min(20cqh, 12cqw), 48px); }
 .graph canvas { flex: 1; min-height: 0; width: 100%; display: block; }
+/* Big number: left, center or right; its size scales with the card times the chosen size (--ns); the unit beside it,
+   centered above or below it, or hidden. */
 .valuew { display: flex; align-items: center; }
-.valuew .readout { font-size: clamp(16px, min(62cqh, 20cqw), 160px); color: var(--c); }
+.valuew.pos-center { justify-content: center; }
+.valuew.pos-right { justify-content: flex-end; }
+.valuew .readout {
+  display: flex; align-items: baseline; color: var(--c);
+  font-size: min(calc(clamp(16px, min(62cqh, 20cqw), 160px) * var(--ns, 1)), 88cqh);
+}
+.valuew.u-left .readout { flex-direction: row-reverse; }
+.valuew.u-left .unit { margin: 0 .12em 0 0; }
+.valuew.u-above .readout, .valuew.u-below .readout {
+  flex-direction: column; align-items: center; line-height: 1;
+  font-size: min(calc(clamp(16px, min(46cqh, 20cqw), 160px) * var(--ns, 1)), 66cqh);
+}
+.valuew.u-above .readout { flex-direction: column-reverse; }
+.valuew.u-above .unit, .valuew.u-below .unit { margin: 0; font-size: .38em; }
+.valuew.u-none .unit { display: none; }
 
 /* Edit mode: dashed cards, a small toolbar, a resize corner; cards move by drag and drop. */
 body.editing .card { border-style: dashed; cursor: grab; }

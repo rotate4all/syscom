@@ -6,7 +6,7 @@ import { Connection } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, unitLabel, decimalsFor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
-  MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, MAX_EXTRA_LABEL, extraLabel, extrasOf, readingText, HISTORY,
+  MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, NUMBER_SIZE, UNIT_POS, unitPosOf, MAX_EXTRA_LABEL, extraLabel, extrasOf, readingText, HISTORY,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
@@ -840,6 +840,8 @@ function fillWidgetForm(w, sensor, catalog) {
   sizeType = w.type;
   fillStyleOptions(w.type, w.style, w.pos);
   $('#w-thick').value = String(Math.round(thicknessOf(w) * 100));
+  $('#w-nsize').value = NUMBER_SIZE.some(([k]) => k === w.numSize) ? w.numSize : 'm';
+  $('#w-upos').value = unitPosOf(w);
   syncThickness();
   extrasShown = extrasOf(w);
   renderExtras();
@@ -900,10 +902,14 @@ $('#w-type').addEventListener('change', () => {
   syncThickness();
 });
 
-/** Thickness applies to gauges, bars and graph lines; a big number has nothing to make thicker. */
+for (const [k, l] of NUMBER_SIZE) $('#w-nsize').add(new Option(l, k));
+for (const [k, l] of UNIT_POS) $('#w-upos').add(new Option(l, k));
+
+/** Thickness applies to gauges, bars and graph lines; a big number has a number size and unit position instead. */
 function syncThickness() {
   const type = $('#w-type').value;
   $('#w-thick-field').hidden = type === 'value';
+  $('#w-num-field').hidden = type !== 'value';
   $('#w-thick-name').textContent = type === 'graph' ? 'Line thickness' : type === 'gauge' ? 'Arc thickness' : 'Bar thickness';
   const v = Number($('#w-thick').value);
   $('#w-thick-out').textContent = `${v}%${v === 100 ? ' (default)' : ''}`;
@@ -915,6 +921,9 @@ $('#w-thick-reset').addEventListener('click', () => { $('#w-thick').value = '100
 // ---------- more readings on the same card (up to MAX_EXTRA besides the main one)
 let extrasShown = [];   // [{ sensor, show, align, size }] in the form
 let extrasTouched = false;   // added, removed or changed by hand (kept when another main sensor is picked)
+// The unit's place next to an extra reading's number, in short words for the small menu.
+const EXTRA_UNIT_POS = UNIT_POS.map(([k]) => [k, { right: 'Right', left: 'Left', above: 'Above', below: 'Below', none: 'Hidden' }[k]]);
+
 function renderExtras() {
   const conn = conns.get(editTarget?.dev.key);
   const list = $('#w-extra-list');
@@ -932,7 +941,8 @@ function renderExtras() {
       + `<button type="button" title="Remove from this card" aria-label="Remove">×</button></div>`
       + `<div class="x-opts"><label class="x-label"><span>Label</span><input type="text" data-k="label" maxlength="${MAX_EXTRA_LABEL}" placeholder="None" autocomplete="off"></label>`
       + `${choice('show', 'Show', EXTRA_SHOW)}${choice('align', 'Position', EXTRA_ALIGN)}${choice('size', 'Size', EXTRA_SIZE)}`
-      + `${units ? choice('unit', 'Unit', units.map((u) => [u, unitLabel(u)]), displayUnit(x, s)) : ''}</div>`;
+      + `${units ? choice('unit', 'Unit', units.map((u) => [u, unitLabel(u)]), displayUnit(x, s)) : ''}`
+      + `${choice('unitPos', 'Suffix', EXTRA_UNIT_POS, unitPosOf(x))}</div>`;
     // The field shows what the card will show: the reading's own label, or the name it gets by default. Empty = none.
     const labelIn = li.querySelector('input[data-k="label"]');
     labelIn.value = extraLabel(x, s, conn?.sensors.get(sensorList.value));
@@ -1086,6 +1096,8 @@ function readForm(id) {
     style: $('#w-type').value === 'gauge' ? $('#w-style').value : undefined,
     pos: positionsFor($('#w-type').value) ? $('#w-pos').value : undefined,
     thick: $('#w-type').value !== 'value' && Number($('#w-thick').value) !== 100 ? Number($('#w-thick').value) : undefined,
+    numSize: $('#w-type').value === 'value' && $('#w-nsize').value !== 'm' ? $('#w-nsize').value : undefined,
+    unitPos: $('#w-type').value === 'value' && $('#w-upos').value !== 'right' ? $('#w-upos').value : undefined,
     extra: extrasShown.length ? extrasShown.filter((x) => x.sensor !== $('#w-sensor').value).slice(0, MAX_EXTRA) : undefined,
     label: $('#w-label').value.trim(),
     sub: $('#w-sub').value.trim() || undefined,

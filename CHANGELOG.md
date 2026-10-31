@@ -31,10 +31,12 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   (25 to 300 % of that) to make it thinner or thicker.
 - Up to 3 sensors on one card: the main display plus up to 2 more readings, each shown as a value, a small graph, or
   both (e.g. CPU load with its power draw, a fan's % with its RPM), each placed left, center or right and in one of
-  four text sizes, with an editable label (by default the sensor's name when it shares the main reading's unit),
+  five text sizes, with the unit beside, above or below the number or hidden, with an editable label (by default the sensor's name when it shares the main reading's unit),
   styled like the main reading. The suggested layout puts power under the CPU
   and GPU load gauges and the VRAM % next to the VRAM bar. A graph card can hide its number (graph only).
 - Each card's title and subtitle (the device name by default) can be renamed, and the subtitle hidden.
+- Big-number cards (such as FPS): the number left, centered or right, in one of five sizes, with its unit right or
+  left of it, centered above or below it, or hidden.
 - Native frame rate next to the shown one under frame generation: NVIDIA DLSS FG (via Reflex PC Latency Stats),
   Intel XeSS FG and AMD Fluid Motion Frames, from public trace events (no injection). The suggested FPS card shows
   both.

@@ -138,8 +138,14 @@ export function extraLabel(x, s, main) {
 
 /** Where an extra reading's value sits on its line: [value, label]. */
 export const EXTRA_ALIGN = [['left', 'Left'], ['center', 'Center'], ['right', 'Right']];
-/** Text size of an extra reading: [value, label, scale]. It still grows and shrinks with the card. */
-export const EXTRA_SIZE = [['s', 'Small', 0.8], ['m', 'Normal', 1], ['l', 'Large', 1.35], ['xl', 'Extra large', 1.75]];
+/** Size of a number (a big-number card's, an extra reading's): [value, label, scale]. Still scales with the card. */
+export const NUMBER_SIZE = [['xs', 'Extra small', 0.6], ['s', 'Small', 0.8], ['m', 'Normal', 1], ['l', 'Large', 1.35], ['xl', 'Extra large', 1.75]];
+export const EXTRA_SIZE = NUMBER_SIZE;
+/** Where the unit (FPS, °C, W…) goes relative to the number: [value, label]. */
+export const UNIT_POS = [['right', 'Right of the number'], ['left', 'Left of the number'], ['above', 'Centered above'], ['below', 'Centered below'], ['none', 'Hidden']];
+const pickOf = (list, v, fallback) => (list.some(([k]) => k === v) ? v : fallback);
+export const numberScale = (size) => NUMBER_SIZE.find(([k]) => k === size)?.[2] ?? 1;
+export const unitPosOf = (x) => pickOf(UNIT_POS, x?.unitPos, 'right');
 
 /**
  * A widget's extra readings as [{ sensor, show, align, size, label? }] (older layouts stored bare sensor ids).
@@ -161,6 +167,7 @@ export function extrasOf(w) {
       size: EXTRA_SIZE.some(([k]) => k === e.size) ? e.size : 'm',
       ...(typeof e.label === 'string' ? { label: e.label.trim().slice(0, MAX_EXTRA_LABEL) } : {}),
       ...(typeof e.unit === 'string' && e.unit ? { unit: e.unit } : {}),
+      ...(e.unitPos && e.unitPos !== 'right' ? { unitPos: unitPosOf(e) } : {}),
     });
   }
   return out.slice(0, MAX_EXTRA);
@@ -336,6 +343,7 @@ export function positionsFor(type) {
   if (type === 'bar') return [['top', 'Above, left'], ['top-right', 'Above, right'], ['bottom', 'Below, left'], ['bottom-right', 'Below, right'], ['left', 'Left of the bar'], ['right', 'Right of the bar'], ['inside', 'Inside the bar']];
   if (type === 'vbar') return [['top', 'Above'], ['bottom', 'Below'], ['left', 'Left of the bar'], ['right', 'Right of the bar'], ['inside', 'Inside the bar']];
   if (type === 'graph') return [['top', 'Above the graph'], ['none', 'Hidden (graph only)']];
+  if (type === 'value') return [['left', 'Left'], ['center', 'Center'], ['right', 'Right']];
   return null;
 }
 
@@ -451,8 +459,8 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     const wrap = el('div', 'card-extra');
     let line = null;
     for (const x of extras) {
-      const scale = EXTRA_SIZE.find(([k]) => k === x.size)?.[2] ?? 1;
-      if (x.show !== 'graph') x.text = readingEl(scale);
+      const scale = numberScale(x.size);
+      if (x.show !== 'graph') x.text = readingEl(scale, unitPosOf(x));
       if (x.show === 'value') {
         if (!line) {
           wrap.append(line = el('div', 'x-line'));
@@ -480,10 +488,12 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
   }
 
   /** An extra reading's text: optional name, number and unit, styled like the main reading (number bright, unit muted). */
-  function readingEl(scale) {
-    const t = el('span', 'x-v');
+  function readingEl(scale, unitPos) {
+    const t = el('span', `x-v u-${unitPos}`);
     t.style.setProperty('--xs', scale);
-    t.append(el('span', 'x-name'), el('span', 'x-num'), el('span', 'x-unit'));
+    const q = el('span', 'x-q');
+    q.append(el('span', 'x-num'), el('span', 'x-unit'));
+    t.append(el('span', 'x-name'), q);
     return t;
   }
 
@@ -493,7 +503,8 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     const text = (name ? `${name} ` : '') + reading;
     if (x.text) {
       const cut = reading.indexOf(' ');
-      const [nameEl, numEl, unitEl] = x.text.children;
+      const [nameEl, q] = x.text.children;
+      const [numEl, unitEl] = q.children;
       setText(nameEl, name);
       setText(numEl, cut < 0 ? reading : reading.slice(0, cut));
       setText(unitEl, cut < 0 ? '' : reading.slice(cut + 1));
@@ -799,7 +810,8 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
 
   // ---- value: big number
   function value() {
-    const body = el('div', 'valuew');
+    const body = el('div', `valuew pos-${pos} u-${unitPosOf(w)}`);
+    body.style.setProperty('--ns', numberScale(w.numSize));
     const r = readout();
     body.append(r.root);
     return { body, paint(v) { r.set(format(v, unit, w.decimals)); } };
