@@ -35,6 +35,8 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   styled like the main reading. The suggested layout puts power under the CPU
   and GPU load gauges and the VRAM % next to the VRAM bar. A graph card can hide its number (graph only).
 - Each card's title and subtitle (the device name by default) can be renamed, and the subtitle hidden.
+- The dashboard keeps the screen on while it's open and in front (Screen Wake Lock): on phones and tablets by default,
+  or always, or never (Settings). Browsers allow it on the secure (https) address.
 - Big-number cards (such as FPS): the number left, centered or right, in one of five sizes, with its unit right or
   left of it, centered above or below it, or hidden.
 - Native frame rate next to the shown one under frame generation: NVIDIA DLSS FG (via Reflex PC Latency Stats),

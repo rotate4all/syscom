@@ -12,6 +12,7 @@ export function load() {
   try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* private mode or corrupt */ }
   return {
     theme: saved.theme || 'auto',
+    awake: ['auto', 'on', 'off'].includes(saved.awake) ? saved.awake : 'auto',
     active: saved.active || 0,
     preview: !!saved.preview,
     collapsed: saved.collapsed && typeof saved.collapsed === 'object' ? saved.collapsed : {},

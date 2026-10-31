@@ -47,6 +47,8 @@ component by component.
 - **Polling you control:** 1 s by default, down to 500 ms, set per PC. With nobody watching, a server reads its
   sensors every 2 s for the history (or not at all, with history turned off).
 - **Light, dark or automatic theme.**
+- **Keeps the screen on** while the dashboard is open, on phones and tablets by default (Settings; needs the secure
+  https:// address, see below).
 - **Installable phone app.** Scan a QR code from the tray app; the phone trusts that PC's own certificate once and
   installs the dashboard as an app over HTTPS. No cloud account, no public domain.
 - **Password sign-in** per PC, with signed tokens and lockout after repeated failures.

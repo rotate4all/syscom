@@ -1140,6 +1140,53 @@ $('#btn-settings').onclick = () => { renderSettings(); dlgSettings.showModal(); 
 dlgSettings.querySelector('[data-close]').onclick = () => dlgSettings.close();
 dlgSettings.addEventListener('click', (e) => { if (e.target === dlgSettings) dlgSettings.close(); });
 
+// ---------- keep the screen on (Screen Wake Lock), by default on phones and tablets
+// The browser lets go of the lock whenever the page is hidden, so it's asked for again each time it comes back.
+let wakeLock = null;
+let wakeAsking = false;
+const touchFirst = matchMedia('(pointer: coarse)');
+const wantAwake = () => state.awake === 'on' || (state.awake === 'auto' && touchFirst.matches);
+
+async function syncWakeLock() {
+  const want = wantAwake() && document.visibilityState === 'visible';
+  if (want && !wakeLock && !wakeAsking && 'wakeLock' in navigator) {
+    wakeAsking = true;
+    try {
+      const lock = await navigator.wakeLock.request('screen');
+      lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
+      wakeLock = lock;
+      if (!wantAwake() || document.visibilityState !== 'visible') syncWakeLock();
+    } catch { /* refused: battery saver, or no recent tap on some browsers (retried on the next one) */ }
+    wakeAsking = false;
+  } else if (!want && wakeLock) {
+    const lock = wakeLock;
+    wakeLock = null;
+    lock.release().catch(() => {});
+  }
+}
+
+function renderAwake() {
+  document.querySelectorAll('#awake button').forEach((b) => b.classList.toggle('active', b.dataset.awake === state.awake));
+  $('#awake-hint').textContent = 'wakeLock' in navigator
+    ? 'While the dashboard is open and in front, the screen doesn\'t dim or lock.'
+    : !window.isSecureContext
+      ? 'Browsers only keep the screen on for secure pages: open the dashboard at its https:// address (see "Set up phone" in the tray app).'
+      : 'This browser can\'t keep the screen on.';
+}
+
+$('#awake').addEventListener('click', (e) => {
+  const v = e.target.closest('button')?.dataset.awake;
+  if (!v) return;
+  state.awake = v;
+  persist();
+  renderAwake();
+  syncWakeLock();
+});
+document.addEventListener('visibilitychange', syncWakeLock);
+// Some browsers only grant the lock right after a tap; asking again on the next one is free when it's held.
+document.addEventListener('pointerdown', syncWakeLock, { passive: true });
+touchFirst.addEventListener?.('change', syncWakeLock);
+
 $('#theme').addEventListener('click', (e) => {
   const t = e.target.closest('button')?.dataset.theme;
   if (!t) return;
@@ -1150,6 +1197,7 @@ $('#theme').addEventListener('click', (e) => {
 
 function renderSettings() {
   applyTheme();
+  renderAwake();
   const list = $('#device-list');
   list.replaceChildren();
   state.devices.forEach((dev, i) => {
@@ -1365,6 +1413,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 applyTheme();
+syncWakeLock();
 applyPreview();
 
 (async function start() {
