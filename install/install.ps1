@@ -118,10 +118,15 @@ if (-not $ok) { Write-Warning 'SYSCOM did not answer on its health endpoint. Che
 if (-not $NoTray) { Start-ScheduledTask -TaskName 'SYSCOM Tray' }
 
 $pwFile = Join-Path $env:ProgramData 'SYSCOM\initial-password.txt'
-$ips = Get-NetIPAddress -AddressFamily IPv4 -PrefixOrigin Dhcp, Manual -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -ExpandProperty IPAddress
+# The real network: adapters with a default route (Wi-Fi, Ethernet). Hyper-V and WSL adapters have none and phones
+# can't reach them. Without any default route (offline PC), list every address.
+$all = @(Get-NetIPAddress -AddressFamily IPv4 -PrefixOrigin Dhcp, Manual -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' })
+$routed = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | ForEach-Object InterfaceIndex)
+$ips = @($all | Where-Object { $routed -contains $_.InterfaceIndex } | ForEach-Object IPAddress)
+if (-not $ips) { $ips = @($all | ForEach-Object IPAddress) }
 Write-Host ''
 Write-Host 'SYSCOM is installed.' -ForegroundColor Green
 foreach ($ip in $ips) { Write-Host "  Dashboard:  http://${ip}:$Port" }
-if ($ips) { Write-Host "  Phone app:  http://$(@($ips)[0]):$Port/trust  (or tray icon > Set up phone)" }
+if ($ips) { Write-Host "  Phone app:  http://$($ips[0]):$Port/trust  (or tray icon > Set up phone)" }
 if (Test-Path $pwFile) { Write-Host "  Password:   $(Get-Content $pwFile)  (change it from the tray app)" }
 Write-Host '  Manage it from the SYSCOM icon in the notification area.'
