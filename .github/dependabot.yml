@@ -1,0 +1,12 @@
+# Keeps the CI actions on their latest releases: Dependabot opens a pull request for each new version.
+# The app's own components (.NET, LibreHardwareMonitor, Windows service hosting) are pinned in versions.json and
+# checked by .github/workflows/dependencies.yml instead.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

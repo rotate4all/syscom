@@ -1,12 +1,13 @@
 <Project>
   <!--
-    Shared build settings. Component versions are pinned in versions.json; build\package.ps1 passes them in as
-    properties, so the values below are only the defaults for IDE / `dotnet build` runs.
+    Shared build settings. Component versions are pinned in one place, versions.json, and read from it here, so
+    IDE / `dotnet build` runs use the same versions as build\package.ps1 (which may also pass them in).
   -->
   <PropertyGroup>
-    <SyscomVersion Condition="'$(SyscomVersion)' == ''">0.1.0</SyscomVersion>
-    <LhmVersion Condition="'$(LhmVersion)' == ''">0.9.6</LhmVersion>
-    <WindowsServicesVersion Condition="'$(WindowsServicesVersion)' == ''">10.0.14</WindowsServicesVersion>
+    <VersionsJson>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)versions.json'))</VersionsJson>
+    <SyscomVersion Condition="'$(SyscomVersion)' == ''">$([System.Text.RegularExpressions.Regex]::Match($(VersionsJson), '"syscom"\s*:\s*"([^"]+)"').Groups[1].Value)</SyscomVersion>
+    <LhmVersion Condition="'$(LhmVersion)' == ''">$([System.Text.RegularExpressions.Regex]::Match($(VersionsJson), '"librehardwaremonitor"\s*:\s*"([^"]+)"').Groups[1].Value)</LhmVersion>
+    <WindowsServicesVersion Condition="'$(WindowsServicesVersion)' == ''">$([System.Text.RegularExpressions.Regex]::Match($(VersionsJson), '"windowsServices"\s*:\s*"([^"]+)"').Groups[1].Value)</WindowsServicesVersion>
 
     <TargetFramework>net10.0</TargetFramework>
     <Version>$(SyscomVersion)</Version>

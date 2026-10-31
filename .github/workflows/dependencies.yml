@@ -1,0 +1,51 @@
+name: Dependencies
+
+# Fails when a component pinned in versions.json is behind its latest stable release or out of support, so an
+# outdated build never goes unnoticed. Runs on every change and weekly (a failed scheduled run emails the owner).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare versions.json with the latest releases
+        shell: pwsh
+        run: |
+          $pinned = Get-Content versions.json -Raw | ConvertFrom-Json
+          $problems = @()
+
+          function Latest-NuGet([string]$id, [string]$prefix = '') {
+            $all = (Invoke-RestMethod "https://api.nuget.org/v3-flatcontainer/$($id.ToLower())/index.json").versions
+            @($all | Where-Object { $_ -notmatch '-' -and $_.StartsWith($prefix) })[-1]
+          }
+
+          $lhm = Latest-NuGet 'LibreHardwareMonitorLib'
+          if ($pinned.librehardwaremonitor -ne $lhm) { $problems += "LibreHardwareMonitorLib: versions.json pins $($pinned.librehardwaremonitor), latest is $lhm" }
+
+          $channel = $pinned.dotnet.channel
+          $hosting = Latest-NuGet 'Microsoft.Extensions.Hosting.WindowsServices' "$($channel.Split('.')[0])."
+          if ($pinned.windowsServices -ne $hosting) { $problems += "Microsoft.Extensions.Hosting.WindowsServices: versions.json pins $($pinned.windowsServices), latest is $hosting" }
+
+          $index = (Invoke-RestMethod 'https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json').'releases-index'
+          $ours = $index | Where-Object { $_.'channel-version' -eq $channel }
+          if (-not $ours) { $problems += ".NET $channel is not a known release channel" }
+          elseif ($ours.'support-phase' -eq 'eol') { $problems += ".NET $channel is out of support" }
+          $newerLts = $index | Where-Object { $_.'release-type' -eq 'lts' -and $_.'support-phase' -eq 'active' -and [version]$_.'channel-version' -gt [version]$channel } | Select-Object -First 1
+          if ($newerLts) { Write-Output "::warning::.NET $($newerLts.'channel-version') LTS is out; SYSCOM is on $channel ($($ours.'support-phase'))." }
+
+          Write-Output "LibreHardwareMonitorLib $lhm · Windows service hosting $hosting · .NET $channel ($($ours.'support-phase')) · PawnIO: $($pinned.pawnio)"
+          if ($problems) {
+            $problems | ForEach-Object { Write-Output "::error::$_" }
+            exit 1
+          }
