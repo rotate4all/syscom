@@ -1,9 +1,12 @@
-import { load, save, normalizeDevice, normalizeItems, normalizeUrl, exportLayout, uid, MIN_INTERVAL } from './store.js';
+import {
+  load, save, normalizeDevice, normalizeLayouts, normalizeUrl, exportLayout, uid, MIN_INTERVAL,
+  layoutMode, setLayoutMode, adoptPhoneView,
+} from './store.js';
 import { Connection } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
-  MAX_EXTRA, EXTRA_SHOW, extrasOf, readingText,
+  MAX_EXTRA, EXTRA_SHOW, extrasOf, readingText, HISTORY,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
@@ -55,6 +58,13 @@ function onData(dev, frame) {
   const page = pages.get(dev.key);
   if (!page) return;
   const conn = conns.get(dev.key);
+  // Recent readings for graphs, kept per page so rebuilt cards keep their history.
+  for (const [id, i] of conn.index) {
+    const a = page.series.get(id);
+    if (!a) continue;
+    a.push(frame.v[i]);
+    if (a.length > HISTORY) a.shift();
+  }
   const visible = state.devices[active] === dev && document.visibilityState === 'visible';
   for (const w of dev.widgets) {
     const inst = page.widgets.get(w.id);
@@ -101,8 +111,12 @@ function removeDevice(dev) {
 
 // ---------- dashboard layout: saved on each PC, cached in this browser
 
-/** Saves a changed layout here right away and on the PC shortly after (edits come in bursts while dragging). */
-function saveLayout(dev) {
+/**
+ * Saves a changed layout here right away and on the PC shortly after (edits come in bursts while dragging).
+ * `adopt: false` when the phone layout was just dropped on purpose (else a phone edit makes it the phone's own).
+ */
+function saveLayout(dev, { adopt = true } = {}) {
+  if (adopt) adoptPhoneView(dev);
   dev.layoutDirty = true;
   persist();
   clearTimeout(dev._pushTimer);
@@ -113,11 +127,11 @@ async function pushLayout(dev) {
   const conn = conns.get(dev.key);
   if (!conn || conn.status !== 'online' || dev._pushing) return;
   dev._pushing = true;
-  const sent = JSON.stringify(dev.widgets);
+  const sent = JSON.stringify(dev.layouts);
   try {
-    const rev = await conn.saveDashboard(dev.widgets);
+    const rev = await conn.saveDashboard(dev.layouts);
     dev.layoutRev = rev;
-    if (JSON.stringify(dev.widgets) === sent) dev.layoutDirty = false;   // else another edit came in meanwhile
+    if (JSON.stringify(dev.layouts) === sent) dev.layoutDirty = false;   // else another edit came in meanwhile
     persist();
   } catch { /* offline: stays dirty and is sent on reconnect */ }
   finally {
@@ -134,12 +148,12 @@ async function syncLayout(dev, rev) {
   let saved;
   try { saved = await conn.loadDashboard(); } catch { return; }   // offline or signed out; the next announcement retries
   if (!saved.rev || !Array.isArray(saved.widgets)) {
-    // Nothing on the PC yet: this browser's layout becomes the PC's.
-    if (dev.widgets.length) { dev.layoutDirty = true; pushLayout(dev); }
+    // Nothing on the PC yet: this browser's layouts become the PC's.
+    if (dev.layouts.desktop.length || dev.layouts.phone) { dev.layoutDirty = true; pushLayout(dev); }
     return;
   }
   if (dev.layoutDirty || saved.rev === dev.layoutRev) return;
-  dev.widgets = normalizeItems(saved.widgets);
+  dev.layouts = normalizeLayouts(saved.widgets, saved.phone);
   dev.layoutRev = saved.rev;
   persist();
   const p = pages.get(dev.key);
@@ -164,7 +178,7 @@ function renderPages() {
       const board = document.createElement('div');
       board.className = 'board';
       section.append(msg, board);
-      p = { section, msg, board, widgets: new Map(), cols: 0 };
+      p = { section, msg, board, widgets: new Map(), series: new Map(), cols: 0 };
       // Columns follow the page width: 4 on a phone, up to 16 on a wide screen.
       p.ro = new ResizeObserver(() => applyColumns(p, dev));
       p.ro.observe(board);
@@ -251,7 +265,11 @@ function renderPage(dev) {
     grid.className = 'grid';
     for (const w of g.items) {
       const sensor = conn.sensors.get(w.sensor);
-      const inst = createWidget(w, sensor, widgetTools(dev, w), (id) => conn.sensors.get(id));
+      const inst = createWidget(w, sensor, widgetTools(dev, w), (id) => conn.sensors.get(id), (id) => {
+        let a = p.series.get(id);
+        if (!a) p.series.set(id, (a = []));
+        return a;
+      });
       inst.maxFrom = effectiveMaxFrom(w, sensor, conn.catalog);
       inst.signature = widgetSignature(w, conn);
       inst.el.addEventListener('click', (e) => {
@@ -288,6 +306,26 @@ function renderPage(dev) {
     input?.scrollIntoView({ block: 'nearest' });
   };
   tools.append(addSection);
+  // Which of the two layouts this is, and on phones a way back to the desktop layout.
+  const which = document.createElement('p');
+  which.className = 'layout-which';
+  if (layoutMode() === 'desktop') {
+    which.innerHTML = '<strong>Desktop layout.</strong> Phones have their own; the phone button above edits it.';
+  } else if (!dev.layouts.phone) {
+    which.innerHTML = '<strong>Phone layout.</strong> Same as the desktop layout until you change something here.';
+  } else {
+    which.innerHTML = '<strong>Phone layout.</strong> Separate from the desktop layout.';
+    const same = document.createElement('button');
+    same.className = 'ghost';
+    same.textContent = '↺ Use the desktop layout';
+    same.onclick = () => {
+      if (!confirm(`Drop the phone layout of ${dev.name} and show the desktop layout on phones again?`)) return;
+      dev.layouts.phone = null;
+      saveLayout(dev, { adopt: false }); renderPage(dev); conn.subscribe();
+    };
+    tools.append(same);
+  }
+  tools.prepend(which);
   if (dev.widgets.length) {
     const reset = document.createElement('button');
     reset.className = 'ghost';
@@ -522,8 +560,24 @@ $('#btn-edit').onclick = () => {
 function applyPreview() {
   document.body.classList.toggle('phone-preview', state.preview);
   $('#btn-preview').setAttribute('aria-pressed', String(state.preview));
+  updateLayoutMode();
   requestAnimationFrame(() => { $('#pages').scrollTo({ left: active * $('#pages').clientWidth }); refreshVisible(); });
 }
+
+// Phones (narrow screens) and the phone preview show each PC's phone layout; wider screens its desktop layout.
+const PHONE_WIDTH = 700;
+function wantedLayoutMode() { return state.preview || innerWidth < PHONE_WIDTH ? 'phone' : 'desktop'; }
+function updateLayoutMode() {
+  const next = wantedLayoutMode();
+  if (next === layoutMode()) return;
+  setLayoutMode(next);
+  for (const dev of state.devices) {
+    if (!pages.has(dev.key)) continue;
+    renderPage(dev);
+    conns.get(dev.key)?.subscribe();
+  }
+}
+addEventListener('resize', updateLayoutMode);
 $('#btn-preview').onclick = () => {
   state.preview = !state.preview;
   persist();
@@ -1123,7 +1177,7 @@ $('#import-file').onchange = async (e) => {
     for (const d of data.devices) {
       const existing = state.devices.find((x) => (d.serverId && x.serverId === d.serverId) || x.url === d.url);
       if (existing) {
-        existing.widgets = normalizeItems(d.widgets);
+        existing.layouts = normalizeLayouts(d.layouts?.desktop ?? d.widgets, d.layouts?.phone);
         existing.layoutDirty = true;   // goes to the PC on the next connection
         existing.interval = d.interval || existing.interval;
         existing.name = d.name || existing.name;

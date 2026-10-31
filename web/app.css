@@ -129,6 +129,8 @@ body.editing .view-only { display: none !important; }
 .board.sorting-sections .group.untitled { display: none; }
 .board-tools { display: none; gap: 8px; flex-wrap: wrap; }
 body.editing .board-tools { display: flex; }
+.layout-which { flex-basis: 100%; margin: 0 0 2px; font-size: 13px; color: var(--muted); }
+.layout-which strong { color: var(--text); font-weight: 600; }
 
 /* Cards: everything inside scales with the card (container query units). */
 .card {

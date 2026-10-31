@@ -23,8 +23,46 @@ export function save(state) {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* storage unavailable */ }
 }
 
+// ---- desktop and phone layouts
+// Each PC keeps two independent layouts. dev.widgets is the one for this screen: the phone layout on phones and in
+// phone preview, else the desktop one. Until the phone layout is changed on its own it follows the desktop layout;
+// edits made on a phone then go to a copy, which becomes the phone layout when saved (adoptPhoneView).
+let mode = 'desktop';
+let phoneViews = new WeakMap();   // device → { from: desktop array, items: its copy }
+
+export function layoutMode() { return mode; }
+export function setLayoutMode(m) { mode = m; phoneViews = new WeakMap(); }
+
+function phoneView(dev) {
+  let v = phoneViews.get(dev);
+  if (!v || v.from !== dev.layouts.desktop) {
+    v = { from: dev.layouts.desktop, items: structuredClone(dev.layouts.desktop) };
+    phoneViews.set(dev, v);
+  }
+  return v.items;
+}
+
+/** Call before saving: a phone edit of a layout that still followed the desktop one becomes the phone layout. */
+export function adoptPhoneView(dev) {
+  if (mode === 'phone' && !dev.layouts.phone) dev.layouts.phone = phoneView(dev);
+}
+
+function withWidgets(dev) {
+  Object.defineProperty(dev, 'widgets', {
+    enumerable: false,   // not stored; dev.layouts is
+    configurable: true,
+    get() { return mode === 'phone' ? dev.layouts.phone || phoneView(dev) : dev.layouts.desktop; },
+    set(items) { if (mode === 'phone') dev.layouts.phone = items; else dev.layouts.desktop = items; },
+  });
+  return dev;
+}
+
+export function normalizeLayouts(desktop, phone) {
+  return { desktop: normalizeItems(desktop), phone: Array.isArray(phone) ? normalizeItems(phone) : null };
+}
+
 export function normalizeDevice(d) {
-  return {
+  return withWidgets({
     key: d.key || uid(),
     serverId: d.serverId || null,
     url: d.url,
@@ -32,10 +70,11 @@ export function normalizeDevice(d) {
     name: d.name || d.url,
     token: d.token || null,
     interval: Math.max(MIN_INTERVAL, Number(d.interval) || DEFAULT_INTERVAL),
-    widgets: normalizeItems(d.widgets),
-    layoutRev: Number(d.layoutRev) || 0,      // revision of the PC's copy this layout matches
+    // Older versions stored one layout as "widgets".
+    layouts: normalizeLayouts(d.layouts?.desktop ?? d.widgets, d.layouts?.phone),
+    layoutRev: Number(d.layoutRev) || 0,      // revision of the PC's copy these layouts match
     layoutDirty: !!d.layoutDirty,             // changed here but not yet saved on the PC
-  };
+  });
 }
 
 export function normalizeItems(items) {

@@ -1,6 +1,7 @@
 // Dashboard widgets: gauges (five styles), horizontal and vertical bars, graph, value. Plain DOM/SVG/canvas, no libraries.
 const SVG = 'http://www.w3.org/2000/svg';
-const HISTORY = 120;
+/** Points kept for live graphs (one per update). */
+export const HISTORY = 120;
 
 export const COLORS = { min: '#22c55e', med: '#f59e0b', max: '#ef4444' };
 
@@ -298,9 +299,14 @@ function arcD(c, r, a0, a1) {
  * `sensor` may be undefined while the catalog is still loading or the hardware is gone. `max` is the live scale
  * maximum (e.g. total VRAM) in the sensor's own unit, when the widget has one. `extras` are the values of the
  * widget's extra readings (w.extra), shown as a line under the main display; `lookup(id)` gives their sensor info.
- * The card's size (grid span) is set by the dashboard; everything inside scales with the card.
+ * `series(id)`, when given, returns a sensor's recent readings (raw, oldest first), kept by the dashboard so a card
+ * that is rebuilt (after an edit, or switching between the desktop and phone layouts) keeps its graph; without it
+ * the card keeps its own. The card's size (grid span) is set by the dashboard; everything inside scales with the card.
  */
-export function createWidget(w, sensor, tools, lookup = () => undefined) {
+export function createWidget(w, sensor, tools, lookup = () => undefined, series = null) {
+  const shared = !!series;
+  const seriesOf = series || (() => []);
+  const highest = (a) => a.reduce((m, v) => (v != null && v > m ? v : m), 0);
   const card = el('div', 'card');
   card.dataset.id = w.id;
   card.dataset.type = w.type;
@@ -319,7 +325,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined) {
   const unit = displayUnit(w, sensor);
   const k = unitFactor(sensor?.unit, unit);
   const scaleMin = Number(w.min) || 0;
-  let peak = 0;
+  let peak = highest(seriesOf(w.sensor)) * k;
   let liveMax = null;
   const scaleMax = () => (w.max !== null && w.max !== '' && w.max !== undefined && !isNaN(w.max) ? Number(w.max)
     : liveMax > scaleMin ? liveMax : niceCeil(peak * 1.1));
@@ -340,7 +346,10 @@ export function createWidget(w, sensor, tools, lookup = () => undefined) {
   bodyWrap.append(impl.body);
 
   // Extra readings under the main display, e.g. a fan's RPM under its % gauge or CPU power under CPU load.
-  const extras = extrasOf(w).map((x) => ({ ...x, s: lookup(x.sensor), v: null, hist: [], peak: 0 }));
+  const extras = extrasOf(w).map((x) => {
+    const hist = seriesOf(x.sensor);
+    return { ...x, s: lookup(x.sensor), v: hist.length ? hist[hist.length - 1] : null, hist, peak: highest(hist) };
+  });
   let extraRo = null;
   if (extras.length) card.append(extraRows());
   if (tools) card.append(tools);
@@ -349,6 +358,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined) {
   return {
     el: card,
     update(v, visible, max, xs) {
+      if (!shared) impl.push?.(v);
       if (v != null) v *= k;
       if (max != null) liveMax = max * k;
       last = v;
@@ -356,9 +366,8 @@ export function createWidget(w, sensor, tools, lookup = () => undefined) {
       if (xs) extras.forEach((x, i) => {
         x.v = xs[i] ?? null;
         if (x.v != null && x.v > x.peak) x.peak = x.v;
-        if (x.show !== 'value') { x.hist.push(x.v); if (x.hist.length > HISTORY) x.hist.shift(); }
+        if (!shared && x.show !== 'value') { x.hist.push(x.v); if (x.hist.length > HISTORY) x.hist.shift(); }
       });
-      impl.push?.(v);
       if (visible) paint();
     },
     refresh() { paint(); },
@@ -638,7 +647,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined) {
     const canvas = el('canvas');
     body.append(r.root, canvas);
     const ctx = canvas.getContext('2d');
-    const hist = [];
+    const hist = seriesOf(w.sensor);   // raw readings; drawn in the card's unit
     let dirtySize = true;
     const ro = new ResizeObserver(() => { dirtySize = true; draw(); });
     ro.observe(canvas);
@@ -684,7 +693,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined) {
       hist.forEach((v, i) => {
         if (v == null) { started = false; return; }
         const x = x0 + i * step;
-        if (!started) { ctx.moveTo(x, y(v)); started = true; } else ctx.lineTo(x, y(v));
+        if (!started) { ctx.moveTo(x, y(v * k)); started = true; } else ctx.lineTo(x, y(v * k));
       });
       ctx.strokeStyle = stroke;
       ctx.lineWidth = lw;

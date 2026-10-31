@@ -93,8 +93,11 @@ to every sensor (a subscribe message without a list) so the sensor list can show
 
 ### Where the dashboard lives
 
-Each PC's layout is saved on that PC (`PUT /api/dashboard`) and cached in the browser, so it shows instantly and
-works offline. Edits made while the PC is unreachable are kept and sent on the next connection; otherwise the PC's
+Each PC's layouts are saved on that PC (`PUT /api/dashboard` with `{ widgets, phone }`) and cached in the browser,
+so they show instantly and work offline. `widgets` is the desktop layout; `phone` is the phone layout, shown on
+screens narrower than 700 px and in the phone preview. While `phone` is null, phones show the desktop layout; the
+first change made on a phone (or in the preview) turns a copy of it into the phone layout, and "Use the desktop
+layout" in edit mode sets it back to null. Graph history is kept per page, so rebuilt cards keep their graphs. Edits made while the PC is unreachable are kept and sent on the next connection; otherwise the PC's
 copy wins. The first browser to connect to a PC without a saved layout uploads its own. The list of PCs and the
 theme stay per browser (localStorage is per origin): open the dashboard from one "home" PC address, and add the
 other PCs from there.

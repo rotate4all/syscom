@@ -73,12 +73,13 @@ export class Connection extends EventTarget {
     return r.json();
   }
 
-  /** This PC's dashboard: { rev, widgets } (rev 0 = none saved yet). */
+  /** This PC's dashboards: { rev, widgets (desktop), phone (null = same as desktop) } (rev 0 = none saved yet). */
   loadDashboard() { return this.api('/api/dashboard'); }
 
-  /** Saves the dashboard on the PC; resolves to its new revision. */
-  async saveDashboard(widgets) {
-    return (await this.api('/api/dashboard', { method: 'PUT', body: JSON.stringify({ widgets }) })).rev;
+  /** Saves both layouts on the PC; resolves to the new revision. */
+  async saveDashboard(layouts) {
+    const body = JSON.stringify({ widgets: layouts.desktop, phone: layouts.phone });
+    return (await this.api('/api/dashboard', { method: 'PUT', body })).rev;
   }
 
   /** One sensor's history: { step, start, avg[], min[], max[], enabled }. */

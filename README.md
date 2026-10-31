@@ -36,7 +36,8 @@ component by component.
   with the card, bar and line thickness included, and can be made thinner or thicker per card), choose where the value
   sits, put up to 3 sensors on one card (say CPU load with its power draw, each as a number, a small graph or both),
   rename titles and subtitles, and start from a suggested layout. Every browser and phone that signs
-  in sees the same layout, and a phone preview lets you lay it out for phones from your PC.
+  in sees the same layouts. Each PC has a desktop layout and a separate phone layout (its own cards, sensors and
+  sections), and the phone preview lets you prepare the phone one from your PC.
 - **30 days of history for every sensor.** Tap any card for a chart of the last 1, 3, 7, 14 or 30 days, with the
   lowest, average and highest readings.
 - **Min / med / max thresholds** per widget, each with its own colour (for example green, amber, red, or reversed for
@@ -101,8 +102,9 @@ yours if it's older. The tray app warns you if PawnIO is ever missing or older t
   drag its bottom-right corner to resize it, ✎ edits it (sensor, with every sensor's live reading in the list;
   display, style, value position, size, thickness, title and subtitle, more readings on the card, scale, thresholds) and 🗑 removes it. **+ Add section** adds a titled group; drag a section by its handle to move it with
   its cards. Outside edit mode, tap a section title to fold it away.
-- **Phone preview:** on a PC, the phone button next to the pencil shows the dashboard at phone width (4 cells
-  across), so you can arrange it for the phones that will view it. Edits there are saved like any other.
+- **Phone layout:** phones have their own layout. On a PC, the phone button next to the pencil shows and edits it at
+  phone width (4 cells across). It starts as the desktop layout and becomes separate with the first change made
+  there; **↺ Use the desktop layout** in edit mode goes back.
 - **History:** tap a card. The slider picks the last 1, 3, 7, 14 or 30 days (1 day when it opens). The line is the
   average and the band behind it the lowest to highest reading; hover or touch the chart for exact values.
 - **Thresholds:** each widget has *min*, *med* and *max* values with a colour each. The widget takes the colour of the
