@@ -44,6 +44,12 @@ export function totalFor(sensor, catalog = []) {
     const used = named(swap(word, 'Used'));
     if (used) return [sensor.id, used.id];
   }
+  // A reading from another family on the same device, e.g. Windows' "D3D Dedicated Memory Used" next to the
+  // driver's "GPU Memory Total": use the device's own memory total. Shared/virtual memory has no such total.
+  if (/used|free|available/i.test(sensor.name) && !/shared|virtual/i.test(sensor.name)) {
+    const total = siblings.find((s) => /total/i.test(s.name) && /memory/i.test(s.name) && !/shared|virtual/i.test(s.name));
+    if (total) return [total.id];
+  }
   return null;
 }
 
@@ -381,7 +387,10 @@ export function suggest(catalog) {
   pick((s) => s.id === '/frames/frametime', { label: 'Frame time', size: 'lg' });
   pick((s) => isCpu(s) && s.type === 'Load' && named(/total/i)(s), { label: 'CPU history', type: 'graph', size: 'lg' });
   pick((s) => s.hardwareType === 'Memory' && s.type === 'Load', { label: 'RAM', type: 'bar' });
-  pick((s) => isGpu(s) && named(/memory used/i)(s), { label: 'VRAM used', type: 'bar' });
+  // The driver's own figure first; Windows' D3D counters as a fallback; never shared (system) memory.
+  pick((s) => isGpu(s) && /^gpu memory used$/i.test(s.name), { label: 'VRAM used', type: 'bar' })
+    || pick((s) => isGpu(s) && /dedicated memory used/i.test(s.name), { label: 'VRAM used', type: 'bar' })
+    || pick((s) => isGpu(s) && named(/memory used/i)(s) && !/shared/i.test(s.name), { label: 'VRAM used', type: 'bar' });
   catalog.filter((s) => s.hardwareType === 'Drive' && s.id.endsWith('/used')).slice(0, 4)
     .forEach((s) => out.push({ ...defaultsFor(s, catalog), label: `${s.hardware} used`, type: 'bar' }));
   pick((s) => s.hardwareType === 'Network' && named(/download/i)(s), { label: 'Download', size: 'lg' });
