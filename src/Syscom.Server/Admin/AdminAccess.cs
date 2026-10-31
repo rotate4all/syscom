@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Syscom.Shared;
@@ -13,10 +12,9 @@ public sealed class AdminAccess
 {
     private readonly byte[] _key;
 
-    public AdminAccess(ILogger<AdminAccess> log)
+    public AdminAccess()
     {
         Directory.CreateDirectory(SyscomPaths.DataDir);
-        RestrictDataDir(log);
 
         var file = SyscomPaths.AdminKeyFile;
         if (!File.Exists(file) || new FileInfo(file).Length < 32)
@@ -33,34 +31,58 @@ public sealed class AdminAccess
         var supplied = Encoding.ASCII.GetBytes(ctx.Request.Headers[SyscomPaths.AdminHeader].ToString());
         return CryptographicOperations.FixedTimeEquals(supplied, _key);
     }
+}
 
-    /// <summary>Config (password hash, token secret) and the admin key live here: SYSTEM + Administrators only.</summary>
-    private static void RestrictDataDir(ILogger log)
+/// <summary>
+/// Config (password hash, token secret), the admin key and the HTTPS keys live in the data folder: SYSTEM and
+/// Administrators only.
+/// </summary>
+public static class DataDirAccess
+{
+    /// <summary>
+    /// Locks the folder to SYSTEM + Administrators and makes everything inside simply inherit that. Runs before
+    /// anything in the folder is read, so it also repairs files that 0.1.0 previews locked everyone out of.
+    /// Returns a warning, or null when all is well.
+    /// </summary>
+    public static string? Secure()
     {
-        if (!OperatingSystem.IsWindows()) return;
-        if (!Elevation.IsAdministrator())
-        {
-            // Locking the folder to Administrators from a non-elevated run would lock this process out of its own
-            // config on the next start. The service and elevated runs restrict it.
-            log.LogWarning("Not running as administrator: {Dir} is not locked down", SyscomPaths.DataDir);
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return null;
+        // Locking the folder from a non-elevated run would lock this process out of its own settings.
+        if (!Elevation.IsAdministrator()) return $"Not running as administrator: {SyscomPaths.DataDir} is not locked down";
         try
         {
-            using var p = Process.Start(new ProcessStartInfo("icacls.exe",
-                $"\"{SyscomPaths.DataDir}\" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /T /C /Q")
+            Directory.CreateDirectory(SyscomPaths.DataDir);
+            var dir = SyscomPaths.DataDir.TrimEnd('\\');
+            // The folder itself: no inherited permissions, full control for SYSTEM and Administrators, passed on to
+            // everything inside. (Inheritance flags only apply to folders, so this is never run recursively.)
+            var root = Icacls($"\"{dir}\" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /Q");
+            if (root != 0) return $"Could not restrict access to {dir} (icacls exit {root})";
+            // Everything inside: drop any explicit or broken permissions and inherit the folder's.
+            if (Directory.EnumerateFileSystemEntries(dir).Any())
             {
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            })!;
-            p.WaitForExit(15_000);
-            if (p.ExitCode != 0) log.LogWarning("Could not restrict access to {Dir} (icacls exit {Code})", SyscomPaths.DataDir, p.ExitCode);
+                var children = Icacls($"\"{dir}\\*\" /reset /T /C /Q");
+                if (children != 0) return $"Could not reset permissions inside {dir} (icacls exit {children})";
+            }
+            return null;
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Could not restrict access to {Dir}", SyscomPaths.DataDir);
+            return $"Could not restrict access to {SyscomPaths.DataDir}: {ex.Message}";
         }
+    }
+
+    private static int Icacls(string args)
+    {
+        using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("icacls.exe", args)
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+        p.StandardOutput.ReadToEnd();
+        p.StandardError.ReadToEnd();
+        p.WaitForExit(30_000);
+        return p.HasExited ? p.ExitCode : -1;
     }
 }

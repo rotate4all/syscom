@@ -27,6 +27,9 @@ if (options.ShowHelp)
     return 0;
 }
 
+// Lock the data folder down (and repair it) before reading anything in it.
+if (DataDirAccess.Secure() is { } accessWarning) Console.Error.WriteLine($"  Warning: {accessWarning}");
+
 ServerConfig cfg;
 try
 {
@@ -37,6 +40,7 @@ catch (UnauthorizedAccessException)
     // The data folder (password hash, certificate keys) is restricted to SYSTEM and Administrators.
     Console.Error.WriteLine($"SYSCOM can't read its settings in {SyscomPaths.DataDir}: that folder is for administrators only.");
     Console.Error.WriteLine("Run this from a terminal opened with \"Run as administrator\" (it's also needed to read all sensors).");
+    Console.Error.WriteLine($"Already elevated? Reset the folder's permissions once:  icacls \"{SyscomPaths.DataDir}\" /reset /t /c /q");
     return 1;
 }
 if (options.Port is { } port) cfg.Port = port;
