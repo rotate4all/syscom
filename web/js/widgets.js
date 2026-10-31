@@ -106,8 +106,12 @@ export const MAX_EXTRA = 2;
 
 /** How an extra reading is shown: [value, label]. */
 export const EXTRA_SHOW = [['value', 'Value'], ['both', 'Value and graph'], ['graph', 'Graph only']];
+/** Where an extra reading's value sits on its line: [value, label]. */
+export const EXTRA_ALIGN = [['left', 'Left'], ['center', 'Center'], ['right', 'Right']];
+/** Text size of an extra reading: [value, label, scale]. It still grows and shrinks with the card. */
+export const EXTRA_SIZE = [['s', 'Small', 0.8], ['m', 'Normal', 1], ['l', 'Large', 1.35], ['xl', 'Extra large', 1.75]];
 
-/** A widget's extra readings as [{ sensor, show }] (older layouts stored bare sensor ids). */
+/** A widget's extra readings as [{ sensor, show, align, size }] (older layouts stored bare sensor ids). */
 export function extrasOf(w) {
   if (!Array.isArray(w?.extra)) return [];
   const seen = new Set([w.sensor]);
@@ -116,9 +120,18 @@ export function extrasOf(w) {
     const e = typeof x === 'string' ? { sensor: x } : x;
     if (!e || typeof e.sensor !== 'string' || seen.has(e.sensor)) continue;
     seen.add(e.sensor);
-    out.push({ sensor: e.sensor, show: EXTRA_SHOW.some(([k]) => k === e.show) ? e.show : 'value' });
+    out.push({
+      sensor: e.sensor,
+      show: EXTRA_SHOW.some(([k]) => k === e.show) ? e.show : 'value',
+      align: EXTRA_ALIGN.some(([k]) => k === e.align) ? e.align : 'center',
+      size: EXTRA_SIZE.some(([k]) => k === e.size) ? e.size : 'm',
+    });
   }
   return out.slice(0, MAX_EXTRA);
+}
+
+function setText(node, text) {
+  if (node.textContent !== text) node.textContent = text;
 }
 
 /** A reading as short text with its unit ("1450 RPM", "62 °C", "1.250 V"), for lists and extra readings. */
@@ -386,22 +399,28 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     for (const x of extras) paintExtra(x);
   }
 
-  // ---- extra readings: consecutive value-only ones share a line; the others get a row with a small graph
+  // ---- extra readings: consecutive value-only ones share a line, each in its left / center / right slot; the
+  // others get a row with a small graph, the value on the chosen side (or centered above it).
   function extraRows() {
     const wrap = el('div', 'card-extra');
     let line = null;
     for (const x of extras) {
+      const scale = EXTRA_SIZE.find(([k]) => k === x.size)?.[2] ?? 1;
+      if (x.show !== 'graph') x.text = readingEl(scale);
       if (x.show === 'value') {
-        if (!line) wrap.append(line = el('div', 'x-line'));
-        x.text = el('span', 'x-v');
-        line.append(x.text);
+        if (!line) {
+          wrap.append(line = el('div', 'x-line'));
+          line.append(el('span', 'x-slot x-left'), el('span', 'x-slot x-center'), el('span', 'x-slot x-right'));
+        }
+        line.querySelector(`.x-${x.align}`).append(x.text);
         x.tipEl = x.text;
         continue;
       }
       line = null;
-      const row = el('div', `x-row x-${x.show}`);
-      if (x.show === 'both') row.append(x.text = el('span', 'x-v'));
+      const row = el('div', `x-row x-${x.show} x-at-${x.align}`);
+      row.style.setProperty('--xs', scale);
       x.canvas = el('canvas');
+      if (x.text) row.append(x.text);
       row.append(x.canvas);
       x.tipEl = row;
       wrap.append(row);
@@ -413,11 +432,26 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     return wrap;
   }
 
+  /** An extra reading's text: optional name, number and unit, styled like the main reading (number bright, unit muted). */
+  function readingEl(scale) {
+    const t = el('span', 'x-v');
+    t.style.setProperty('--xs', scale);
+    t.append(el('span', 'x-name'), el('span', 'x-num'), el('span', 'x-unit'));
+    return t;
+  }
+
   function paintExtra(x) {
     // A reading in the same unit as the main one (native vs shown FPS, CPU vs GPU temperature) says what it is.
     const named = x.s && sensor && x.s.unit === sensor.unit;
-    const text = (named ? `${x.s.name} ` : '') + (x.s ? readingText(x.s, x.v) : '–');
-    if (x.text && x.text.textContent !== text) x.text.textContent = text;
+    const reading = x.s ? readingText(x.s, x.v) : '–';
+    const text = (named ? `${x.s.name} ` : '') + reading;
+    if (x.text) {
+      const cut = reading.indexOf(' ');
+      const [nameEl, numEl, unitEl] = x.text.children;
+      setText(nameEl, named ? x.s.name : '');
+      setText(numEl, cut < 0 ? reading : reading.slice(0, cut));
+      setText(unitEl, cut < 0 ? '' : reading.slice(cut + 1));
+    }
     const tip = x.s ? `${x.s.name} (${x.s.hardware}): ${text}` : 'Sensor not available';
     if (x.tipEl.title !== tip) x.tipEl.title = tip;
     drawSpark(x);

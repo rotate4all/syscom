@@ -6,7 +6,7 @@ import { Connection } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
-  MAX_EXTRA, EXTRA_SHOW, extrasOf, readingText, HISTORY,
+  MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, extrasOf, readingText, HISTORY,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
@@ -908,7 +908,7 @@ $('#w-thick').addEventListener('input', syncThickness);
 $('#w-thick-reset').addEventListener('click', () => { $('#w-thick').value = '100'; syncThickness(); });
 
 // ---------- more readings on the same card (up to MAX_EXTRA besides the main one)
-let extrasShown = [];   // [{ sensor, show }] in the form
+let extrasShown = [];   // [{ sensor, show, align, size }] in the form
 let extrasTouched = false;   // added, removed or changed by hand (kept when another main sensor is picked)
 function renderExtras() {
   const conn = conns.get(editTarget?.dev.key);
@@ -919,11 +919,18 @@ function renderExtras() {
     const s = conn?.sensors.get(x.sensor);
     const li = document.createElement('li');
     li.dataset.id = x.sensor;
-    li.innerHTML = `<span class="n">${escapeHtml(s ? s.name : 'Sensor not available')}<small>${escapeHtml(s ? `${typeLabel(s)} · ${s.hardware}` : '')}</small></span>`
+    const choice = (key, label, options) => `<label><span>${label}</span><select data-k="${key}">`
+      + options.map(([k, l]) => `<option value="${k}"${k === x[key] ? ' selected' : ''}>${l}</option>`).join('') + '</select></label>';
+    li.innerHTML = `<div class="x-head"><span class="n">${escapeHtml(s ? s.name : 'Sensor not available')}<small>${escapeHtml(s ? `${typeLabel(s)} · ${s.hardware}` : '')}</small></span>`
       + `<span class="v">${escapeHtml(readingText(s, liveValues.get(x.sensor)))}</span>`
-      + `<select aria-label="Show as">${EXTRA_SHOW.map(([k, l]) => `<option value="${k}"${k === x.show ? ' selected' : ''}>${l}</option>`).join('')}</select>`
-      + `<button type="button" title="Remove from this card" aria-label="Remove">×</button>`;
-    li.querySelector('select').onchange = (e) => { x.show = e.target.value; extrasTouched = true; };
+      + `<button type="button" title="Remove from this card" aria-label="Remove">×</button></div>`
+      + `<div class="x-opts">${choice('show', 'Show', EXTRA_SHOW)}${choice('align', 'Position', EXTRA_ALIGN)}${choice('size', 'Size', EXTRA_SIZE)}</div>`;
+    // A graph without its number has no text to place or size.
+    const syncOpts = () => li.querySelectorAll('select:not([data-k="show"])').forEach((sel) => { sel.disabled = x.show === 'graph'; });
+    li.querySelectorAll('select').forEach((sel) => {
+      sel.onchange = () => { x[sel.dataset.k] = sel.value; extrasTouched = true; syncOpts(); };
+    });
+    syncOpts();
     li.querySelector('button').onclick = () => { extrasShown = extrasShown.filter((y) => y !== x); extrasTouched = true; renderExtras(); };
     list.append(li);
   }
@@ -975,7 +982,7 @@ function addExtra(id) {
   if (!id || extrasShown.length >= MAX_EXTRA) return;
   const s = conns.get(editTarget?.dev.key)?.sensors.get(id);
   // Power, loads and data rates read well as a number with a small graph; a fan's RPM next to its % as a number.
-  extrasShown.push({ sensor: id, show: s && ['Power', 'Throughput', 'Load'].includes(s.type) ? 'both' : 'value' });
+  extrasShown.push({ sensor: id, show: s && ['Power', 'Throughput', 'Load'].includes(s.type) ? 'both' : 'value', align: 'center', size: 'm' });
   extrasTouched = true;
   showExtraPicker(false);
   renderExtras();

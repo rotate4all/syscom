@@ -151,12 +151,27 @@ body:not(.editing) .card { cursor: pointer; }
 .card-body { flex: 1; min-height: 0; display: flex; container-type: size; }
 /* Extra readings under the main display, e.g. a fan's RPM under its % gauge or CPU power under CPU load */
 .card-extra {
-  display: grid; gap: 4px; margin-top: 2px; line-height: 1.25; min-width: 0;
-  font-size: clamp(11px, 6cqmin, 20px); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted);
+  display: grid; gap: 4px; margin-top: 2px; line-height: 1.2; min-width: 0;
+  font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text);
 }
-.card-extra .x-line { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 14px; white-space: nowrap; overflow: hidden; max-height: 1.25em; }
-.card-extra .x-row { display: flex; align-items: center; gap: 8px; min-width: 0; height: clamp(18px, 13cqh, 64px); }
-.card-extra .x-row .x-v { flex: none; min-width: 4.5em; white-space: nowrap; }
+/* Same look as the main reading: the number in the text colour, the unit (and a name, if any) smaller and muted. */
+.card-extra .x-v { font-size: calc(clamp(11px, 6cqmin, 20px) * var(--xs, 1)); white-space: nowrap; }
+.card-extra .x-name, .card-extra .x-unit { color: var(--muted); font-weight: 500; font-size: .78em; }
+.card-extra .x-name:not(:empty) { margin-right: .35em; }
+.card-extra .x-unit:not(:empty) { margin-left: .2em; }
+/* Value-only readings share a line: left corner, center, right corner. */
+.card-extra .x-line { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; gap: 0 12px; overflow: hidden; }
+.card-extra .x-slot { display: flex; align-items: baseline; gap: 0 12px; min-width: 0; overflow: hidden; }
+.card-extra .x-left { justify-content: flex-start; }
+.card-extra .x-center { justify-content: center; }
+.card-extra .x-right { justify-content: flex-end; }
+.card-extra .x-row { display: flex; align-items: center; gap: 8px; min-width: 0; height: calc(clamp(18px, 13cqh, 64px) * max(1, var(--xs, 1))); }
+.card-extra .x-row .x-v { flex: none; min-width: 4.5em; }
+.card-extra .x-row.x-at-right { flex-direction: row-reverse; }
+.card-extra .x-row.x-at-right .x-v { text-align: right; }
+.card-extra .x-row.x-at-center { flex-direction: column; align-items: stretch; gap: 2px; height: auto; }
+.card-extra .x-row.x-at-center .x-v { text-align: center; }
+.card-extra .x-row.x-at-center canvas { flex: none; height: clamp(14px, 10cqh, 48px); }
 .card-extra .x-row canvas { flex: 1; min-width: 0; height: 100%; display: block; }
 @container card (max-height: 90px) { .card-extra { display: none; } }
 .graph.pos-none .readout { display: none; }
@@ -338,9 +353,13 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .extras > span small { opacity: .8; margin-left: 4px; }
 .extra-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .extra-list li {
-  display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 11px; font-size: 14px; color: var(--text);
+  display: grid; gap: 6px; padding: 6px 6px 8px 11px; font-size: 14px; color: var(--text);
   border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2);
 }
+.extra-list .x-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.extra-list .x-opts { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.extra-list .x-opts label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.extra-list select:disabled { opacity: .5; }
 .extra-list .n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .extra-list .n small { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .extra-list .v { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }

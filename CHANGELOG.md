@@ -29,7 +29,8 @@ All notable changes are listed here. Versions follow [semantic versioning](https
 - Thickness of gauge arcs, bars and graph lines grows and shrinks with the card, and each card has a thickness setting
   (25 to 300 % of that) to make it thinner or thicker.
 - Up to 3 sensors on one card: the main display plus up to 2 more readings, each shown as a value, a small graph, or
-  both (e.g. CPU load with its power draw, a fan's % with its RPM). The suggested layout puts power under the CPU
+  both (e.g. CPU load with its power draw, a fan's % with its RPM), each placed left, center or right and in one of
+  four text sizes, styled like the main reading. The suggested layout puts power under the CPU
   and GPU load gauges and the VRAM % next to the VRAM bar. A graph card can hide its number (graph only).
 - Each card's title and subtitle (the device name by default) can be renamed, and the subtitle hidden.
 - Native frame rate next to the shown one under frame generation: NVIDIA DLSS FG (via Reflex PC Latency Stats),
