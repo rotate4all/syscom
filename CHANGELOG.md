@@ -39,7 +39,10 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   preview use the phone layout, which follows the desktop one until it is changed. Graphs keep their history when
   cards are rebuilt or the layout switches.
 - The widget editor's sensor list shows every sensor's live reading, and percentages of how full memory or a drive
-  is are listed with the sizes. Adding another reading to a card uses the same kind of list (device tabs, search,
+  is are listed with the sizes. NVIDIA's power as a share of the card's power limit ("GPU Power" in %) is listed
+  under Power, next to the watts, and the suggested GPU card falls back to it when a card reports no watts.
+  Sensors that LibreHardwareMonitor only adds after its first readings (NVIDIA's "GPU Package" watts among them)
+  now show up instead of being missed until a restart. Adding another reading to a card uses the same kind of list (device tabs, search,
   live readings, this card's device first).
 - Percent used for any "X Used" / "X Total" pair, worked out by the server (e.g. "GPU Memory Used" in % on every GPU
   vendor).

@@ -57,7 +57,7 @@ component by component.
 | Area | Sensors |
 | --- | --- |
 | CPU | total and per-core load, clocks, package/core temperatures, power, voltages |
-| GPU (NVIDIA, AMD, Intel) | core/memory load, clocks, temperatures, hot spot, fan speed, power, VRAM used/free and used in % |
+| GPU (NVIDIA, AMD, Intel) | core/memory load, clocks, temperatures, hot spot, fan speed, power (W, and % of the power limit on NVIDIA), VRAM used/free and used in % |
 | Memory | load, used/available |
 | Storage | temperatures (SMART), activity, read/write rates, used space, free/total space per drive |
 | Motherboard | fan speeds, voltages, temperatures via Super I/O |

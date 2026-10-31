@@ -613,8 +613,11 @@ const TYPE_LABEL = { Data: 'Size', SmallData: 'Size', Throughput: 'Data rate', F
 const deviceCat = (s) => DEVICE_CATS.find(([, , test]) => test(s))?.[0] || 'other';
 // How full memory or a drive is (a percentage of "used") sits with the sizes, not with processor load.
 const isFullness = (s) => s.unit === '%' && /\bused\b|\bspace\b/i.test(s.name);
-const readingCat = (s) => (isFullness(s) ? 'data' : READING_CATS.find(([, , types]) => types.includes(s.type))?.[0] || 'other');
-const typeLabel = (s) => (isFullness(s) ? 'Usage' : TYPE_LABEL[s.type] || s.type);
+// NVIDIA cards also report power as a share of their power limit ("GPU Power", "GPU Board Power" in %): that's power too.
+const isPowerShare = (s) => s.type === 'Load' && /\bpower\b/i.test(s.name);
+const readingCat = (s) => (isFullness(s) ? 'data' : isPowerShare(s) ? 'power'
+  : READING_CATS.find(([, , types]) => types.includes(s.type))?.[0] || 'other');
+const typeLabel = (s) => (isFullness(s) ? 'Usage' : isPowerShare(s) ? '% of power limit' : TYPE_LABEL[s.type] || s.type);
 const pick = { dev: 'all', read: 'all' };
 let unitShown = null;   // the size unit the form's numbers are in
 

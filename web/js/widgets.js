@@ -753,7 +753,9 @@ export function suggest(catalog) {
     return s ? { extra: [{ sensor: s.id, show }] } : {};
   };
   const cpuPower = extra((s) => isCpu(s) && s.type === 'Power' && named(/package|cpu power|ppt/i)(s), 'both');
-  const gpuPower = extra((s) => isGpu(s) && s.type === 'Power' && named(/package|power|board|total/i)(s), 'both');
+  // GPU power in watts; without it, NVIDIA's power as a share of the card's power limit.
+  const gpuWatts = extra((s) => isGpu(s) && s.type === 'Power' && named(/package|power|board|total/i)(s), 'both');
+  const gpuPower = gpuWatts.extra ? gpuWatts : extra((s) => isGpu(s) && s.type === 'Load' && named(/^gpu power$/i)(s), 'both');
 
   begin('CPU');
   pick((s) => isCpu(s) && s.type === 'Load' && named(/total/i)(s), { label: 'CPU load', ...cpuPower, ...(cpuPower.extra ? { w: 2, h: 4 } : {}) });

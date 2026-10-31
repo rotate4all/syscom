@@ -19,6 +19,7 @@ public sealed class MockSensorSource : ISensorSource
         ("/mock/gpu/fan/0", "GPU Fan 1", "Mock GPU 16GB", "GpuNvidia", "Fan", 0, 3000),
         ("/mock/gpu/control/0", "GPU Fan 1", "Mock GPU 16GB", "GpuNvidia", "Control", 0, 100),
         ("/mock/gpu/power/0", "GPU Package", "Mock GPU 16GB", "GpuNvidia", "Power", 15, 250),
+        ("/mock/gpu/load/3", "GPU Power", "Mock GPU 16GB", "GpuNvidia", "Load", 6, 100),
         ("/mock/gpu/smalldata/2", "D3D Dedicated Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 500, 9000),
         ("/mock/gpu/smalldata/3", "D3D Shared Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 50, 400),
         ("/mock/gpu/smalldata/0", "GPU Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 500, 9000),
@@ -57,6 +58,7 @@ public sealed class MockSensorSource : ISensorSource
         values["/frames/frametime"] = 1000 / values["/frames/fps"];
         values["/frames/fps-native"] = values["/frames/fps"] / 2;   // as with frame generation adding one frame per rendered one
         values["/mock/gpu/control/0"] = values["/mock/gpu/fan/0"] / 30;   // fan % matching its RPM
+        values["/mock/gpu/load/3"] = values["/mock/gpu/power/0"] / 2.5f;  // % of a 250 W power limit
         values["/frames/frametime-worst"] = Math.Max(values["/frames/frametime-worst"], values["/frames/frametime"] * 1.3f);
         var changed = _first;
         _first = false;
