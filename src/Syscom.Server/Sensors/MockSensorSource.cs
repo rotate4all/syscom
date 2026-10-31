@@ -24,6 +24,7 @@ public sealed class MockSensorSource : ISensorSource
         ("/mock/gpu/smalldata/0", "GPU Memory Used", "Mock GPU 16GB", "GpuNvidia", "SmallData", 500, 9000),
         ("/mock/gpu/smalldata/1", "GPU Memory Total", "Mock GPU 16GB", "GpuNvidia", "SmallData", 16376, 16376),
         ("/frames/fps", "Frame rate", "MockGame", "Game", "Fps", 50, 165),
+        ("/frames/fps-native", "Native frame rate", "MockGame", "Game", "Fps", 25, 83),
         ("/frames/frametime", "Frame time", "MockGame", "Game", "Frametime", 6, 20),
         ("/frames/frametime-worst", "Frame time (worst)", "MockGame", "Game", "Frametime", 8, 40),
         ("/mock/ram/load/0", "Memory", "Mock Memory", "Memory", "Load", 20, 95),
@@ -54,6 +55,7 @@ public sealed class MockSensorSource : ISensorSource
         // Keep related readings consistent: 32 GB of RAM, frame time matching the frame rate.
         values["/mock/ram/data/1"] = 32 - values["/mock/ram/data/0"];
         values["/frames/frametime"] = 1000 / values["/frames/fps"];
+        values["/frames/fps-native"] = values["/frames/fps"] / 2;   // as with frame generation adding one frame per rendered one
         values["/mock/gpu/control/0"] = values["/mock/gpu/fan/0"] / 30;   // fan % matching its RPM
         values["/frames/frametime-worst"] = Math.Max(values["/frames/frametime-worst"], values["/frames/frametime"] * 1.3f);
         var changed = _first;

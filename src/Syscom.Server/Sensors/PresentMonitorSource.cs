@@ -5,12 +5,23 @@ using System.Runtime.InteropServices;
 namespace Syscom.Server.Sensors;
 
 /// <summary>
-/// Frame rate and frame time of the app drawing the most frames (normally the game), for any GPU vendor.
+/// Frame rate and frame time of the app drawing the most frames (normally the game), for any GPU vendor, plus its
+/// native frame rate when frame generation adds frames in between.
 ///
 /// Reads Windows' own graphics "present" events through a real-time ETW session (providers Microsoft-Windows-DXGI
 /// and Microsoft-Windows-D3D9), the same source PresentMon and FrameView use. Nothing is injected into the game, so
 /// it is safe with anti-cheat. No extra dependency: the ETW API is called directly. Needs administrator rights,
 /// which the SYSCOM service has.
+///
+/// "Frame rate" counts the frames shown, generated ones included. "Native frame rate" counts the frames the game
+/// renders itself, from the same public trace events PresentMon reads:
+///  - NVIDIA Reflex "PC Latency Stats" (every game with DLSS Frame Generation ships Reflex): one set of markers per
+///    rendered frame. While this provider is enabled the game also sends itself Reflex latency pings, as it does
+///    for PresentMon and FrameView.
+///  - Intel-PresentMon frame types: Intel XeSS Frame Generation marks each present as rendered or generated, and
+///    AMD's driver marks the frames AMD Fluid Motion Frames adds (those never pass through DXGI, so they are added
+///    to the shown frame rate).
+/// Without any of these (no frame generation, or FSR 3 frame generation in a game without Reflex) both are the same.
 ///
 /// Covers Direct3D 9 to 12 games, and Vulkan/OpenGL games whose driver presents through DXGI. The session runs while
 /// the hub polls (always while history is on, else only with clients connected) and stops 30 s after the last poll.
@@ -18,14 +29,21 @@ namespace Syscom.Server.Sensors;
 public sealed unsafe class PresentMonitorSource : ISensorSource
 {
     public const string FpsId = "/frames/fps";
+    public const string NativeFpsId = "/frames/fps-native";
     public const string FrameTimeId = "/frames/frametime";
     public const string FrameTimeWorstId = "/frames/frametime-worst";
 
     private const string SessionName = "SYSCOM-FrameRate";
     private static readonly Guid DxgiProvider = new("CA11C036-0102-4A2D-A6AD-F03CFED5D3C9");
     private static readonly Guid D3d9Provider = new("783ACA0A-790E-4D7F-8451-AA850511C6B9");
+    private static readonly Guid PclProvider = new("0D216F06-82A6-4D49-BC4F-8F38AE56EFAB");        // NVIDIA PC Latency Stats (Reflex)
+    private static readonly Guid FrameTypeProvider = new("ECAA4712-4644-442F-B94C-A32F6CF8A499");  // Intel-PresentMon
     private const ushort DxgiPresentStart = 42;
     private const ushort D3d9PresentStart = 1;
+    private const uint PclSimulationStart = 0, PclPresentStart = 4;
+    private const ushort PresentFrameTypeInfo = 1, FlipFrameTypeInfo = 2;
+    private const byte FrameTypeOriginal = 1, FrameTypeAfmf = 100;
+    private const ushort ExtTypeSchemaTl = 11;   // EVENT_HEADER_EXT_TYPE_EVENT_SCHEMA_TL
     private const float MinCandidateFps = 5;
 
     // Window compositor, shell and overlays present too; they're never "the game".
@@ -42,7 +60,12 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
     private readonly object _sessionGate = new(); // start / stop
     private readonly Timer _idleTimer;
     private Dictionary<int, List<long>> _incoming = new();
+    // Native frames per app, by signal: Reflex simulation starts, Reflex present starts, XeSS-FG rendered presents.
+    private Dictionary<(int Pid, Signal Kind), List<long>> _incomingNative = new();
+    private List<long> _incomingAfmf = new();                        // frames AMD Fluid Motion Frames added (any app)
     private readonly Dictionary<int, List<long>> _frames = new();   // pid → present timestamps (QPC), last ~1 s
+    private readonly Dictionary<(int Pid, Signal Kind), List<long>> _native = new();
+    private readonly List<long> _afmf = new();
     private readonly Dictionary<int, long> _lastSeen = new();       // pid → when its events last arrived (TickCount64)
     private readonly Dictionary<int, string> _names = new();
     private ulong _session;
@@ -65,9 +88,12 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
     public string Name => "Frame rate";
     public IReadOnlyList<SensorInfo> Catalog { get; private set; }
 
+    private enum Signal { ReflexSimulation, ReflexPresent, XefgRendered }
+
     private static IReadOnlyList<SensorInfo> BuildCatalog(string app) => new[]
     {
         new SensorInfo(FpsId, "Frame rate", app, "Game", "Fps", Units.For("Fps")),
+        new SensorInfo(NativeFpsId, "Native frame rate", app, "Game", "Fps", Units.For("Fps")),
         new SensorInfo(FrameTimeId, "Frame time", app, "Game", "Frametime", Units.For("Frametime")),
         new SensorInfo(FrameTimeWorstId, "Frame time (worst)", app, "Game", "Frametime", Units.For("Frametime")),
     };
@@ -78,7 +104,14 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
         EnsureRunning();
 
         Dictionary<int, List<long>> batch;
-        lock (_gate) { batch = _incoming; _incoming = new(); }
+        Dictionary<(int, Signal), List<long>> nativeBatch;
+        List<long> afmfBatch;
+        lock (_gate)
+        {
+            batch = _incoming; _incoming = new();
+            nativeBatch = _incomingNative; _incomingNative = new();
+            afmfBatch = _incomingAfmf; _incomingAfmf = new();
+        }
         var tick = Environment.TickCount64;
         foreach (var (pid, stamps) in batch)
         {
@@ -86,6 +119,12 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
             list.AddRange(stamps);
             _lastSeen[pid] = tick;
         }
+        foreach (var (key, stamps) in nativeBatch)
+        {
+            if (!_native.TryGetValue(key, out var list)) _native[key] = list = new List<long>(256);
+            list.AddRange(stamps);
+        }
+        _afmf.AddRange(afmfBatch);
 
         // Per app: frames within the last second of its own events (ETW delivers in batches, so anchor on the newest).
         var freq = (double)Stopwatch.Frequency;
@@ -127,14 +166,37 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
             Catalog = BuildCatalog(app);
             changed = true;
         }
+        // Native frame rates per app and signal (this also trims every list to its last second).
+        var nativeRates = _native.ToDictionary(kv => kv.Key, kv => Rate(kv.Value));
+        var afmfRate = Rate(_afmf);
         if (_chosen != 0 && stats.TryGetValue(_chosen, out var s))
         {
-            values[FpsId] = (float)s.Fps;
+            // Native frames: the strongest signal this app gives; frames AFMF adds are shown on top of its presents.
+            var native = new[] { Signal.ReflexSimulation, Signal.ReflexPresent, Signal.XefgRendered }
+                .Select(k => nativeRates.GetValueOrDefault((_chosen, k)))
+                .FirstOrDefault(r => r is not null);
+            var added = native is null ? afmfRate ?? 0 : 0;
+            values[FpsId] = (float)(s.Fps + added);
+            values[NativeFpsId] = (float)(native ?? s.Fps);
             values[FrameTimeId] = (float)s.AvgMs;
             values[FrameTimeWorstId] = (float)s.WorstMs;
         }
+        foreach (var key in _native.Keys.Where(k => !_frames.ContainsKey(k.Pid)).ToList()) _native.Remove(key);
         foreach (var pid in _names.Keys.Where(p => !_frames.ContainsKey(p)).ToList()) _names.Remove(pid);
         return changed;
+    }
+
+    /// <summary>Frames per second over the last second of a list of timestamps (trimmed); null when there is no recent run.</summary>
+    private static double? Rate(List<long> list)
+    {
+        if (list.Count < 2) { list.Clear(); return null; }
+        list.Sort();
+        var last = list[^1];
+        list.RemoveAll(t => t < last - Stopwatch.Frequency);
+        var now = Stopwatch.GetTimestamp();
+        if (list.Count < 2 || now - last > 3 * Stopwatch.Frequency) return null;   // stale: the signal stopped
+        var span = (last - list[0]) / (double)Stopwatch.Frequency;
+        return span > 0 ? (list.Count - 1) / span : null;
     }
 
     private string NameOf(int pid)
@@ -192,11 +254,11 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
             Marshal.FreeHGlobal((IntPtr)props);
         }
 
-        foreach (var provider in new[] { DxgiProvider, D3d9Provider })
+        foreach (var provider in new[] { DxgiProvider, D3d9Provider, PclProvider, FrameTypeProvider })
         {
             var guid = provider;
             var err = EnableTraceEx2(_session, &guid, EnableProvider, TraceLevelInformation, ulong.MaxValue, 0, 0, null);
-            if (err != 0) _log.LogWarning("Could not enable present events from {Provider} (error {Error})", provider, err);
+            if (err != 0) _log.LogWarning("Could not enable frame events from {Provider} (error {Error})", provider, err);
         }
 
         var logfile = (byte*)NativeMemory.AllocZeroed(LogfileSize);
@@ -251,8 +313,10 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
         _thread?.Join(2000);
         _thread = null;
         if (_loggerName != IntPtr.Zero) { Marshal.FreeHGlobal(_loggerName); _loggerName = IntPtr.Zero; }
-        lock (_gate) _incoming.Clear();
+        lock (_gate) { _incoming.Clear(); _incomingNative.Clear(); _incomingAfmf.Clear(); }
         _frames.Clear();
+        _native.Clear();
+        _afmf.Clear();
         _lastSeen.Clear();
     }
 
@@ -262,13 +326,53 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
         var self = _active;
         if (self is null) return;
         var id = e->EventId;
-        if (!((id == DxgiPresentStart && e->ProviderId == DxgiProvider) || (id == D3d9PresentStart && e->ProviderId == D3d9Provider))) return;
         var pid = (int)e->ProcessId;
-        lock (self._gate)
+        if ((id == DxgiPresentStart && e->ProviderId == DxgiProvider) || (id == D3d9PresentStart && e->ProviderId == D3d9Provider))
         {
-            if (!self._incoming.TryGetValue(pid, out var list)) self._incoming[pid] = list = new List<long>(64);
-            list.Add(e->TimeStamp);
+            lock (self._gate)
+            {
+                if (!self._incoming.TryGetValue(pid, out var list)) self._incoming[pid] = list = new List<long>(64);
+                list.Add(e->TimeStamp);
+            }
         }
+        else if (e->ProviderId == PclProvider)
+        {
+            // TraceLogging "PCLStatsEvent" (and V2/V3, "ReflexStatsEvent"): UInt32 Marker, UInt64 FrameID, ...
+            if (e->UserDataLength < 12 || !IsStatsEvent(e)) return;
+            var marker = *(uint*)e->UserData;
+            var kind = marker == PclSimulationStart ? Signal.ReflexSimulation : marker == PclPresentStart ? Signal.ReflexPresent : (Signal?)null;
+            if (kind is { } k) self.AddNative(pid, k, e->TimeStamp);
+        }
+        else if (e->ProviderId == FrameTypeProvider)
+        {
+            // Packed: PresentFrameType_Info { UInt32 FrameId; UInt8 FrameType; ... },
+            //         FlipFrameType_Info { UInt32 VidPnSourceId; UInt32 LayerIndex; UInt64 PresentId; UInt8 FrameType; ... }
+            if (id == PresentFrameTypeInfo && e->UserDataLength >= 5 && e->UserData[4] == FrameTypeOriginal)
+                self.AddNative(pid, Signal.XefgRendered, e->TimeStamp);
+            else if (id == FlipFrameTypeInfo && e->UserDataLength >= 17 && e->UserData[16] == FrameTypeAfmf)
+                lock (self._gate) self._incomingAfmf.Add(e->TimeStamp);
+        }
+    }
+
+    private void AddNative(int pid, Signal kind, long stamp)
+    {
+        lock (_gate)
+        {
+            if (!_incomingNative.TryGetValue((pid, kind), out var list)) _incomingNative[(pid, kind)] = list = new List<long>(64);
+            list.Add(stamp);
+        }
+    }
+
+    /// <summary>Whether a PC Latency Stats event is a frame marker, by the event name in its TraceLogging schema.</summary>
+    private static bool IsStatsEvent(EventRecord* e)
+    {
+        for (var i = 0; i < e->ExtendedDataCount; i++)
+        {
+            var item = e->ExtendedData + i;
+            if (item->ExtType != ExtTypeSchemaTl) continue;
+            return new ReadOnlySpan<byte>((void*)item->DataPtr, item->DataSize).IndexOf("StatsEvent"u8) >= 0;
+        }
+        return false;
     }
 
     public void Dispose()
@@ -307,7 +411,7 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
         return p;
     }
 
-    /// <summary>The EVENT_RECORD header fields used here.</summary>
+    /// <summary>The EVENT_RECORD fields used here (EVENT_HEADER is the first 80 bytes).</summary>
     [StructLayout(LayoutKind.Explicit)]
     private struct EventRecord
     {
@@ -315,6 +419,19 @@ public sealed unsafe class PresentMonitorSource : ISensorSource
         [FieldOffset(16)] public long TimeStamp;
         [FieldOffset(24)] public Guid ProviderId;
         [FieldOffset(40)] public ushort EventId;
+        [FieldOffset(84)] public ushort ExtendedDataCount;
+        [FieldOffset(86)] public ushort UserDataLength;
+        [FieldOffset(88)] public ExtendedDataItem* ExtendedData;
+        [FieldOffset(96)] public byte* UserData;
+    }
+
+    /// <summary>EVENT_HEADER_EXTENDED_DATA_ITEM.</summary>
+    [StructLayout(LayoutKind.Explicit)]
+    private struct ExtendedDataItem
+    {
+        [FieldOffset(2)] public ushort ExtType;
+        [FieldOffset(6)] public ushort DataSize;
+        [FieldOffset(8)] public ulong DataPtr;
     }
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]

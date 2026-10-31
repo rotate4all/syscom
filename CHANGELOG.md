@@ -32,6 +32,9 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   both (e.g. CPU load with its power draw, a fan's % with its RPM). The suggested layout puts power under the CPU
   and GPU load gauges and the VRAM % next to the VRAM bar. A graph card can hide its number (graph only).
 - Each card's title and subtitle (the device name by default) can be renamed, and the subtitle hidden.
+- Native frame rate next to the shown one under frame generation: NVIDIA DLSS FG (via Reflex PC Latency Stats),
+  Intel XeSS FG and AMD Fluid Motion Frames, from public trace events (no injection). The suggested FPS card shows
+  both.
 - Separate desktop and phone layouts per PC, each with its own cards, sensors and sections. Phones and the phone
   preview use the phone layout, which follows the desktop one until it is changed. Graphs keep their history when
   cards are rebuilt or the layout switches.

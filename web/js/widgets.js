@@ -414,7 +414,9 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
   }
 
   function paintExtra(x) {
-    const text = x.s ? readingText(x.s, x.v) : '–';
+    // A reading in the same unit as the main one (native vs shown FPS, CPU vs GPU temperature) says what it is.
+    const named = x.s && sensor && x.s.unit === sensor.unit;
+    const text = (named ? `${x.s.name} ` : '') + (x.s ? readingText(x.s, x.v) : '–');
     if (x.text && x.text.textContent !== text) x.text.textContent = text;
     const tip = x.s ? `${x.s.name} (${x.s.hardware}): ${text}` : 'Sensor not available';
     if (x.tipEl.title !== tip) x.tipEl.title = tip;
@@ -774,8 +776,10 @@ export function suggest(catalog) {
     || vramPick((s) => isGpu(s) && named(/memory used/i)(s) && !/shared/i.test(s.name));
 
   begin('Gaming');
-  // Our own frame counter works on any GPU; AMD's driver FPS (via LibreHardwareMonitor) is the fallback.
-  pick((s) => s.id === '/frames/fps', { label: 'FPS' }) || pick((s) => s.type === 'Fps', { label: 'FPS' });
+  // Our own frame counter works on any GPU (shown frames, plus the game's native ones under frame generation);
+  // AMD's driver FPS (via LibreHardwareMonitor) is the fallback.
+  pick((s) => s.id === '/frames/fps', { label: 'FPS', ...extra((s) => s.id === '/frames/fps-native', 'value') })
+    || pick((s) => s.type === 'Fps', { label: 'FPS' });
   pick((s) => s.id === '/frames/frametime-worst', { label: 'Worst frame', type: 'value' });
   pick((s) => s.id === '/frames/frametime', { label: 'Frame time', w: 4, h: 3 });
 

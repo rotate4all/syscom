@@ -63,12 +63,18 @@ component by component.
 | Motherboard | fan speeds, voltages, temperatures via Super I/O |
 | Network | upload/download speed, data transferred |
 | Other | battery, PSU (where supported) |
-| Games | frame rate, frame time and worst frame time of the app drawing the most frames, on any GPU (see below) |
+| Games | frame rate (shown and native), frame time and worst frame time of the app drawing the most frames, on any GPU (see below) |
 
 Frame rate comes from SYSCOM's own counter on Windows' graphics present events (Microsoft-Windows-DXGI and -D3D9,
 the same events PresentMon and FrameView use). Nothing is injected into games, so it's safe with anti-cheat. It
 covers Direct3D 9 to 12, plus Vulkan/OpenGL games whose driver presents through DXGI. The widget shows which app
 it's measuring.
+
+With frame generation, **Frame rate** counts every frame shown, generated ones included, and **Native frame rate**
+the frames the game renders itself. The native count comes from public trace events too: NVIDIA Reflex's PC
+Latency Stats (every game with DLSS Frame Generation has Reflex), and the frame types Intel XeSS Frame Generation
+and AMD Fluid Motion Frames report. FSR 3 frame generation in a game without Reflex can't be told apart; there,
+and without frame generation, both show the same number.
 
 Sensors come from [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor), the
 one hardware dependency. It covers what GPU-Z and MSI Afterburner report, without running either. Exactly what
