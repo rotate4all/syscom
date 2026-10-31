@@ -2,7 +2,7 @@ import { load, save, normalizeDevice, normalizeItems, normalizeUrl, exportLayout
 import { Connection } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom, displayUnit,
-  isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format,
+  isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
@@ -675,6 +675,8 @@ function fillWidgetForm(w, sensor, catalog) {
   $('#w-h').value = w.h || dh;
   sizeType = w.type;
   fillStyleOptions(w.type, w.style, w.pos);
+  $('#w-thick').value = String(Math.round(thicknessOf(w) * 100));
+  syncThickness();
   $('#w-label').value = w.label || '';
   $('#w-min').value = w.min ?? '';
   $('#w-max').value = w.max ?? '';
@@ -723,7 +725,20 @@ $('#w-type').addEventListener('change', () => {
   if (Number($('#w-w').value) === ow && Number($('#w-h').value) === oh) [$('#w-w').value, $('#w-h').value] = defaultSize(type);
   sizeType = type;
   fillStyleOptions(type, $('#w-style').value, null);
+  syncThickness();
 });
+
+/** Thickness applies to gauges, bars and graph lines; a big number has nothing to make thicker. */
+function syncThickness() {
+  const type = $('#w-type').value;
+  $('#w-thick-field').hidden = type === 'value';
+  $('#w-thick-name').textContent = type === 'graph' ? 'Line thickness' : type === 'gauge' ? 'Arc thickness' : 'Bar thickness';
+  const v = Number($('#w-thick').value);
+  $('#w-thick-out').textContent = `${v}%${v === 100 ? ' (default)' : ''}`;
+  $('#w-thick-reset').disabled = v === 100;
+}
+$('#w-thick').addEventListener('input', syncThickness);
+$('#w-thick-reset').addEventListener('click', () => { $('#w-thick').value = '100'; syncThickness(); });
 $('#w-style').addEventListener('change', () => {
   if ($('#w-type').value === 'gauge') $('#w-pos').value = defaultPosition('gauge', $('#w-style').value);
 });
@@ -782,6 +797,7 @@ function readForm(id) {
     h: Math.max(1, Math.min(MAX_H, Math.round(Number($('#w-h').value) || 1))),
     style: $('#w-type').value === 'gauge' ? $('#w-style').value : undefined,
     pos: positionsFor($('#w-type').value) ? $('#w-pos').value : undefined,
+    thick: $('#w-type').value !== 'value' && Number($('#w-thick').value) !== 100 ? Number($('#w-thick').value) : undefined,
     label: $('#w-label').value.trim(),
     min: num('#w-min') ?? 0,
     max: useTotal ? null : num('#w-max'),

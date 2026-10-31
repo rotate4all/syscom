@@ -84,7 +84,8 @@ browser has closed the dashboard.
 Cards sit on a grid of fixed-height rows (56 px) and columns about 90 px wide: 4 on a phone, more on wider screens (up
 to 16). A card's size is a number of columns and rows, so a layout keeps its shape from phone to desktop; a card never
 spans more columns than the screen has. Everything inside a card is sized in container query units, so it scales
-with the card. Sections are separate grids, so cards never flow from one section into another.
+with the card. Bar, arc and line thickness work the same way; a card's optional `thick` (25 to 300, a percentage)
+multiplies that proportional thickness, so a thicker card still scales when it is resized. Sections are separate grids, so cards never flow from one section into another.
 
 ### Where the dashboard lives
 

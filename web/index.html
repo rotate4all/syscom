@@ -82,6 +82,15 @@
         <p class="hint field-hint">In grid cells. A phone is 4 cells wide. You can also drag a card's corner in edit mode.</p>
       </div>
 
+      <div class="range thick" id="w-thick-field">
+        <label for="w-thick"><span id="w-thick-name">Thickness</span> <output id="w-thick-out" for="w-thick">100%</output></label>
+        <div class="thick-row">
+          <input type="range" id="w-thick" min="25" max="300" step="5" value="100" aria-describedby="w-thick-hint">
+          <button type="button" class="ghost" id="w-thick-reset">Reset</button>
+        </div>
+        <p class="hint" id="w-thick-hint">Grows and shrinks with the card. 100% is the default; this makes it thinner or thicker than that.</p>
+      </div>
+
       <label class="field">Label <input id="w-label" maxlength="40"></label>
 
       <div class="row">

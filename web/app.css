@@ -156,22 +156,21 @@ body:not(.editing) .card { cursor: pointer; }
 .gbox { position: relative; aspect-ratio: var(--ar); width: min(100cqw, calc(100cqh * var(--ar))); container-type: inline-size; }
 .gbox svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .gbox .readout { position: absolute; left: 0; right: 0; top: var(--y); transform: translateY(-50%); text-align: center; font-size: calc(var(--fs) * 1cqw); }
-.gbox .track { stroke: var(--track); stroke-width: 10; }
-.gbox .track.thin { stroke-width: 6; }
-.gbox .fill { stroke: var(--c); stroke-width: 10; transition: stroke-dasharray .35s ease, stroke .35s; }
+.gbox .track { stroke: var(--track); }
+.gbox .fill { stroke: var(--c); transition: stroke-dasharray .35s ease, stroke .35s; }
 .gbox .tick { stroke-width: 3; stroke-linecap: butt; }
-.gbox .seg { stroke: var(--track); stroke-width: 12; stroke-linecap: butt; transition: stroke .25s; }
+.gbox .seg { stroke: var(--track); stroke-linecap: butt; transition: stroke .25s; }
 .gbox .seg.on { stroke: var(--c); }
-.gbox .zone { stroke-width: 6; stroke-linecap: butt; opacity: .85; }
+.gbox .zone { stroke-linecap: butt; opacity: .85; }
 .gbox .scale-tick { stroke: var(--muted); stroke-width: 1.2; }
-.gbox .needle { stroke: var(--text); stroke-width: 3; transform-box: view-box; transition: transform .35s ease; }
+.gbox .needle { stroke: var(--text); transform-box: view-box; transition: transform .35s ease; }
 .gbox .hub { fill: var(--text); stroke: none; }
 
 /* Horizontal bar: the value above, below, beside or inside the bar. */
 .barw {
   display: grid; align-content: center; gap: 4px 10px; min-width: 0;
   grid-template-columns: minmax(0, 1fr); grid-template-areas: "value" "track" "scale";
-  --thick: clamp(8px, 12cqh, 30px);
+  --thick: min(calc(max(6px, 12cqh) * var(--tk, 1)), 70cqh);   /* proportional to the card, times the widget's thickness setting */
 }
 .barw > .readout { grid-area: value; font-size: clamp(14px, min(34cqh, 15cqw), 72px); }
 .barw > .bar-track { grid-area: track; }
@@ -181,7 +180,7 @@ body:not(.editing) .card { cursor: pointer; }
 .barw.pos-left { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "value track" "value scale"; }
 .barw.pos-right { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "track value" "scale value"; }
 .barw.pos-left > .readout, .barw.pos-right > .readout { align-self: center; font-size: clamp(14px, min(40cqh, 12cqw), 72px); }
-.barw.pos-inside { grid-template-areas: "track" "scale"; --thick: clamp(24px, 48cqh, 90px); }
+.barw.pos-inside { grid-template-areas: "track" "scale"; --thick: min(calc(max(20px, 48cqh) * var(--tk, 1)), calc(100cqh - 18px)); }
 .bar-track { position: relative; height: var(--thick); border-radius: calc(var(--thick) / 2); background: var(--track); overflow: hidden; }
 .bar-fill { height: 100%; width: 0; border-radius: inherit; background: var(--c); transition: width .35s ease, height .35s ease, background .35s; }
 .bar-tick { position: absolute; top: 0; bottom: 0; width: 2px; }
@@ -196,7 +195,7 @@ body:not(.editing) .card { cursor: pointer; }
 .vbarw {
   display: grid; justify-content: center; align-items: stretch; gap: 6px 8px; min-height: 0;
   grid-template-columns: auto auto; grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "value value" "track scale";
-  --thick: clamp(10px, 20cqw, 44px);
+  --thick: min(calc(max(8px, 20cqw) * var(--tk, 1)), 70cqw);
 }
 .vbarw > .readout { grid-area: value; justify-self: center; font-size: clamp(14px, min(16cqh, 22cqw), 64px); }
 .vbarw > .bar-track { grid-area: track; }
@@ -205,12 +204,12 @@ body:not(.editing) .card { cursor: pointer; }
 .vbarw.pos-left { grid-template-columns: auto auto auto; grid-template-rows: minmax(0, 1fr); grid-template-areas: "value track scale"; }
 .vbarw.pos-right { grid-template-columns: auto auto auto; grid-template-rows: minmax(0, 1fr); grid-template-areas: "track scale value"; }
 .vbarw.pos-left > .readout, .vbarw.pos-right > .readout { align-self: center; font-size: clamp(14px, min(14cqh, 14cqw), 64px); }
-.vbarw.pos-inside { grid-template-rows: minmax(0, 1fr); grid-template-areas: "track scale"; --thick: clamp(28px, 46cqw, 110px); }
+.vbarw.pos-inside { grid-template-rows: minmax(0, 1fr); grid-template-areas: "track scale"; --thick: min(calc(max(24px, 46cqw) * var(--tk, 1)), calc(100cqw - 30px)); }
 .vbarw .bar-track { width: var(--thick); height: auto; min-height: 0; display: flex; align-items: flex-end; border-radius: min(calc(var(--thick) / 2), 10px); }
 .vbarw .bar-fill { width: 100%; height: 0; border-radius: 0; }
 .vbarw .bar-tick { top: auto; left: 0; right: 0; width: auto; height: 2px; }
 .vbarw .bar-scale { flex-direction: column; justify-content: space-between; font-size: clamp(10px, 7cqw, 13px); }
-.vbarw .bar-track > .readout { font-size: calc(var(--thick) * .32); }
+.vbarw .bar-track > .readout { font-size: clamp(10px, calc(var(--thick) * .32), 64px); }
 
 /* Graph and value */
 .graph { display: flex; flex-direction: column; gap: 2px; }
@@ -351,6 +350,13 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .range label { font-size: 13px; font-weight: 600; }
 .range input[type="range"] { padding: 0; border: 0; background: none; accent-color: var(--accent); height: 28px; }
 .range-ticks { display: flex; justify-content: space-between; margin: -4px 2px 0; }
+.range.thick { gap: 2px; }
+.range.thick label { font-weight: 500; color: var(--muted); }
+.range.thick output { color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; margin-left: 4px; }
+.range.thick .hint { margin: 0; font-size: 12px; }
+.thick-row { display: flex; gap: 10px; align-items: center; }
+.thick-row input { flex: 1; min-width: 0; }
+.thick-row button { padding: 6px 12px; }
 .range-ticks button { border: 0; background: none; padding: 2px 4px; font-size: 12px; color: var(--muted); cursor: pointer; min-width: 32px; }
 .range-ticks button:first-child { text-align: left; } .range-ticks button:last-child { text-align: right; }
 .range-ticks button.active { color: var(--text); font-weight: 650; }

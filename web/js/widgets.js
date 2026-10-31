@@ -179,6 +179,13 @@ export function defaultSize(type, legacy) {
   return [...((legacy === 'lg' ? WIDE : SIZES)[type] || SIZES.value)];
 }
 
+/** A widget's thickness setting as a factor (1 = proportional to the card, the default). */
+export const THICKNESS = { min: 25, max: 300, step: 5 };
+export function thicknessOf(w) {
+  const t = Number(w.thick);
+  return t >= THICKNESS.min && t <= THICKNESS.max ? t / 100 : 1;
+}
+
 // ---- device icons, shown in the card's top-right corner
 
 const ICONS = {
@@ -280,6 +287,8 @@ export function createWidget(w, sensor, tools) {
   const thresholds = (w.thresholds || []).filter((t) => t.value !== null && t.value !== '' && !isNaN(t.value))
     .sort((a, b) => a.value - b.value);
   const pos = positionsFor(w.type)?.some(([p]) => p === w.pos) ? w.pos : defaultPosition(w.type, w.style);
+  // Bar / arc / line thickness: proportional to the card by default; the widget's setting scales that (25–300 %).
+  const tk = thicknessOf(w);
 
   let impl;
   if (w.type === 'gauge') impl = gauge();
@@ -344,12 +353,17 @@ export function createWidget(w, sensor, tools) {
     const ticks = svgEl('g');
     let draw;   // (v, f) → void
 
+    // The outer edge stays put; a thicker stroke grows inwards.
+    const stroke = (base, min, max) => Math.max(min, Math.min(max, base * tk));
     if (style === 'segments') {
+      const sw = stroke(12, 2, 28);   // capped so the value still fits inside
+      const r0 = g.r + 6 - sw / 2;
       const n = 20;
       const step = (a1 - a0) / n;
       const segs = [];
       for (let i = 0; i < n; i++) {
-        const s = svgEl('path', { d: arcD(g.c, g.r, a0 + i * step + 1.2, a0 + (i + 1) * step - 1.2), class: 'seg' });
+        const s = svgEl('path', { d: arcD(g.c, r0, a0 + i * step + 1.2, a0 + (i + 1) * step - 1.2), class: 'seg' });
+        s.style.strokeWidth = sw;
         svg.append(s);
         segs.push(s);
       }
@@ -363,12 +377,18 @@ export function createWidget(w, sensor, tools) {
         });
       };
     } else if (style === 'needle') {
-      svg.append(svgEl('path', { d: arcD(g.c, g.r, a0, a1), class: 'track thin' }));
+      const sw = stroke(6, 1.5, 22);
+      const r0 = g.r + 3 - sw / 2;
+      const inner = r0 - sw / 2;
+      const track = svgEl('path', { d: arcD(g.c, r0, a0, a1), class: 'track' });
+      track.style.strokeWidth = sw;
+      svg.append(track);
       const zones = svgEl('g');
       svg.append(zones, ticks);
-      const needle = svgEl('line', { x1: g.c[0], y1: g.c[1], x2: g.c[0] + g.r - 6, y2: g.c[1], class: 'needle' });
+      const needle = svgEl('line', { x1: g.c[0], y1: g.c[1], x2: g.c[0] + inner - 3, y2: g.c[1], class: 'needle' });
       needle.style.transformOrigin = `${g.c[0]}px ${g.c[1]}px`;
-      svg.append(needle, svgEl('circle', { cx: g.c[0], cy: g.c[1], r: 4.5, class: 'hub' }));
+      needle.style.strokeWidth = Math.max(1.5, Math.min(6, 3 * Math.sqrt(tk)));
+      svg.append(needle, svgEl('circle', { cx: g.c[0], cy: g.c[1], r: Math.max(3, Math.min(8, 4.5 * Math.sqrt(tk))), class: 'hub' }));
       let zonesMax = null;
       draw = (v, f) => {
         const max = scaleMax();
@@ -379,11 +399,15 @@ export function createWidget(w, sensor, tools) {
           thresholds.forEach((t, i) => {
             const from = frac(Number(t.value));
             const to = i + 1 < thresholds.length ? frac(Number(thresholds[i + 1].value)) : 1;
-            if (to > from) zones.append(svgEl('path', { d: arcD(g.c, g.r, angle(from), angle(to)), class: 'zone', stroke: t.color }));
+            if (to > from) {
+              const z = svgEl('path', { d: arcD(g.c, r0, angle(from), angle(to)), class: 'zone', stroke: t.color });
+              z.style.strokeWidth = sw;
+              zones.append(z);
+            }
           });
           for (let i = 0; i <= 10; i++) {
-            const [x1, y1] = pt(g.c, g.r - 7, angle(i / 10));
-            const [x2, y2] = pt(g.c, g.r - (i % 5 ? 10 : 13), angle(i / 10));
+            const [x1, y1] = pt(g.c, inner - 1, angle(i / 10));
+            const [x2, y2] = pt(g.c, inner - (i % 5 ? 4 : 7), angle(i / 10));
             ticks.append(svgEl('line', { x1, y1, x2, y2, class: 'scale-tick' }));
           }
         }
@@ -391,9 +415,12 @@ export function createWidget(w, sensor, tools) {
       };
     } else {
       // arc, semicircle, ring: a track with a filled part and threshold ticks
-      const d = arcD(g.c, g.r, a0, a1);
+      const sw = stroke(10, 2, 32);
+      const r0 = g.r + 5 - sw / 2;
+      const d = arcD(g.c, r0, a0, a1);
       const track = svgEl('path', { d, class: 'track', pathLength: 100 });
       const fill = svgEl('path', { d, class: 'fill', pathLength: 100, 'stroke-dasharray': '0 100' });
+      track.style.strokeWidth = fill.style.strokeWidth = sw;
       svg.append(track, fill, ticks);
       let tickMax = null;
       draw = (v, f) => {
@@ -404,8 +431,8 @@ export function createWidget(w, sensor, tools) {
           for (const t of thresholds) {
             if (Number(t.value) <= scaleMin) continue;
             const a = angle(frac(Number(t.value)));
-            const [x1, y1] = pt(g.c, g.r - 8, a);
-            const [x2, y2] = pt(g.c, g.r + 8, a);
+            const [x1, y1] = pt(g.c, r0 - sw / 2 - 3, a);
+            const [x2, y2] = pt(g.c, r0 + sw / 2 + 3, a);
             ticks.append(svgEl('line', { x1, y1, x2, y2, class: 'tick', stroke: t.color }));
           }
         }
@@ -460,6 +487,7 @@ export function createWidget(w, sensor, tools) {
 
   function hbar() {
     const body = el('div', `barw pos-${pos}`);
+    body.style.setProperty('--tk', tk);
     const p = barParts(false);
     if (pos === 'inside') p.track.append(p.r.root);
     else body.append(p.r.root);
@@ -469,6 +497,7 @@ export function createWidget(w, sensor, tools) {
 
   function vbar() {
     const body = el('div', `vbarw pos-${pos}`);
+    body.style.setProperty('--tk', tk);
     const p = barParts(true);
     if (pos === 'inside') p.track.append(p.r.root);
     else body.append(p.r.root);
@@ -503,7 +532,10 @@ export function createWidget(w, sensor, tools) {
       const styles = getComputedStyle(card);
       const stroke = color || styles.getPropertyValue('--accent').trim() || '#38bdf8';
       const max = scaleMax();
-      const y = (v) => hpx - 2 - frac(v) * (hpx - 4);
+      // Line thickness grows with the card, times the widget's setting; the plot keeps half of it clear at the edges.
+      const lw = Math.min(12, Math.max(1.5, Math.min(4, hpx / 45)) * tk);
+      const pad = Math.max(2, lw / 2);
+      const y = (v) => hpx - pad - frac(v) * (hpx - 2 * pad);
       const step = wpx / (HISTORY - 1);
 
       // threshold guide lines
@@ -529,7 +561,7 @@ export function createWidget(w, sensor, tools) {
         if (!started) { ctx.moveTo(x, y(v)); started = true; } else ctx.lineTo(x, y(v));
       });
       ctx.strokeStyle = stroke;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = lw;
       ctx.lineJoin = 'round';
       ctx.stroke();
       // soft fill under the line

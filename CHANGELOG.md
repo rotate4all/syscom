@@ -26,6 +26,8 @@ All notable changes are listed here. Versions follow [semantic versioning](https
   renamed and folded away); a device icon on every card; phone preview on wide screens.
 - More ways to show a reading: five gauge styles (arc, semicircle, ring, needle, segments), horizontal and vertical
   bars, and a choice of where the value sits (gauge: top, center, bottom; bars: above, below, beside or inside).
+- Thickness of gauge arcs, bars and graph lines grows and shrinks with the card, and each card has a thickness setting
+  (25 to 300 % of that) to make it thinner or thicker.
 - Each PC stores its own dashboard (`/api/dashboard`), so every browser and phone sees the layout prepared for it;
   changes reach open dashboards right away.
 - History: every sensor is recorded for 30 days (`/api/history`); tapping a card opens a chart with a 1, 3, 7, 14 or
