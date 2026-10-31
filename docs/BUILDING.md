@@ -53,6 +53,17 @@ dotnet run --project src\Syscom.Server        # run in a console; use an elevate
 On Windows, `RuntimeIdentifier` defaults to `win-x64`, so `dotnet build` picks up LibreHardwareMonitorLib
 (Windows-only, RID-specific package). Builds without a Windows RID compile it out and use mock data.
 
+Phones and other PCs can't reach a server started with `dotnet run` until Windows Firewall lets the ports in (the
+installer adds rules for `syscom.exe`; from source the server runs as `dotnet.exe`). Once, in an elevated terminal:
+
+```powershell
+New-NetFirewallRule -DisplayName 'SYSCOM dev' -Direction Inbound -Protocol TCP -LocalPort 47810,47812 -Profile Private -Action Allow
+New-NetFirewallRule -DisplayName 'SYSCOM dev discovery' -Direction Inbound -Protocol UDP -LocalPort 47811 -Profile Private -Action Allow
+```
+
+The network must be a Private one (`Get-NetConnectionProfile`). Remove the rules again with
+`Remove-NetFirewallRule -DisplayName 'SYSCOM dev*'`.
+
 ## Package
 
 ```powershell
