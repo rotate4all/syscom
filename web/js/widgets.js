@@ -106,12 +106,25 @@ export const MAX_EXTRA = 2;
 
 /** How an extra reading is shown: [value, label]. */
 export const EXTRA_SHOW = [['value', 'Value'], ['both', 'Value and graph'], ['graph', 'Graph only']];
+/** Longest label an extra reading can have. */
+export const MAX_EXTRA_LABEL = 40;
+
+/** The text shown before an extra reading's value: its own label, or the sensor's name when it shares the main unit. */
+export function extraLabel(x, s, main) {
+  if (typeof x.label === 'string') return x.label;
+  return s && main && s.unit === main.unit ? s.name : '';
+}
+
 /** Where an extra reading's value sits on its line: [value, label]. */
 export const EXTRA_ALIGN = [['left', 'Left'], ['center', 'Center'], ['right', 'Right']];
 /** Text size of an extra reading: [value, label, scale]. It still grows and shrinks with the card. */
 export const EXTRA_SIZE = [['s', 'Small', 0.8], ['m', 'Normal', 1], ['l', 'Large', 1.35], ['xl', 'Extra large', 1.75]];
 
-/** A widget's extra readings as [{ sensor, show, align, size }] (older layouts stored bare sensor ids). */
+/**
+ * A widget's extra readings as [{ sensor, show, align, size, label? }] (older layouts stored bare sensor ids).
+ * `label` is the text before the value; without one, the sensor's name is shown only when its unit is the main
+ * reading's (so native and shown FPS can be told apart). An empty label shows none.
+ */
 export function extrasOf(w) {
   if (!Array.isArray(w?.extra)) return [];
   const seen = new Set([w.sensor]);
@@ -125,6 +138,7 @@ export function extrasOf(w) {
       show: EXTRA_SHOW.some(([k]) => k === e.show) ? e.show : 'value',
       align: EXTRA_ALIGN.some(([k]) => k === e.align) ? e.align : 'center',
       size: EXTRA_SIZE.some(([k]) => k === e.size) ? e.size : 'm',
+      ...(typeof e.label === 'string' ? { label: e.label.trim().slice(0, MAX_EXTRA_LABEL) } : {}),
     });
   }
   return out.slice(0, MAX_EXTRA);
@@ -425,6 +439,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
       x.tipEl = row;
       wrap.append(row);
     }
+    for (const l of wrap.querySelectorAll('.x-line')) l.classList.toggle('has-center', !!l.querySelector('.x-center > *'));
     if (extras.some((x) => x.canvas)) {
       extraRo = new ResizeObserver(() => extras.forEach((x) => { x.sized = false; drawSpark(x); }));
       extras.forEach((x) => x.canvas && extraRo.observe(x.canvas));
@@ -441,14 +456,13 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
   }
 
   function paintExtra(x) {
-    // A reading in the same unit as the main one (native vs shown FPS, CPU vs GPU temperature) says what it is.
-    const named = x.s && sensor && x.s.unit === sensor.unit;
+    const name = extraLabel(x, x.s, sensor);
     const reading = x.s ? readingText(x.s, x.v) : '–';
-    const text = (named ? `${x.s.name} ` : '') + reading;
+    const text = (name ? `${name} ` : '') + reading;
     if (x.text) {
       const cut = reading.indexOf(' ');
       const [nameEl, numEl, unitEl] = x.text.children;
-      setText(nameEl, named ? x.s.name : '');
+      setText(nameEl, name);
       setText(numEl, cut < 0 ? reading : reading.slice(0, cut));
       setText(unitEl, cut < 0 ? '' : reading.slice(cut + 1));
     }

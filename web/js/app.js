@@ -6,7 +6,7 @@ import { Connection } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
-  MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, extrasOf, readingText, HISTORY,
+  MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, MAX_EXTRA_LABEL, extraLabel, extrasOf, readingText, HISTORY,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
@@ -924,9 +924,14 @@ function renderExtras() {
     li.innerHTML = `<div class="x-head"><span class="n">${escapeHtml(s ? s.name : 'Sensor not available')}<small>${escapeHtml(s ? `${typeLabel(s)} · ${s.hardware}` : '')}</small></span>`
       + `<span class="v">${escapeHtml(readingText(s, liveValues.get(x.sensor)))}</span>`
       + `<button type="button" title="Remove from this card" aria-label="Remove">×</button></div>`
-      + `<div class="x-opts">${choice('show', 'Show', EXTRA_SHOW)}${choice('align', 'Position', EXTRA_ALIGN)}${choice('size', 'Size', EXTRA_SIZE)}</div>`;
-    // A graph without its number has no text to place or size.
-    const syncOpts = () => li.querySelectorAll('select:not([data-k="show"])').forEach((sel) => { sel.disabled = x.show === 'graph'; });
+      + `<div class="x-opts"><label class="x-label"><span>Label</span><input type="text" data-k="label" maxlength="${MAX_EXTRA_LABEL}" placeholder="None" autocomplete="off"></label>`
+      + `${choice('show', 'Show', EXTRA_SHOW)}${choice('align', 'Position', EXTRA_ALIGN)}${choice('size', 'Size', EXTRA_SIZE)}</div>`;
+    // The field shows what the card will show: the reading's own label, or the name it gets by default. Empty = none.
+    const labelIn = li.querySelector('input[data-k="label"]');
+    labelIn.value = extraLabel(x, s, conn?.sensors.get(sensorList.value));
+    labelIn.oninput = () => { x.label = labelIn.value; extrasTouched = true; };
+    // A graph without its number has no text to label, place or size.
+    const syncOpts = () => li.querySelectorAll('[data-k]:not([data-k="show"])').forEach((c) => { c.disabled = x.show === 'graph'; });
     li.querySelectorAll('select').forEach((sel) => {
       sel.onchange = () => { x[sel.dataset.k] = sel.value; extrasTouched = true; syncOpts(); };
     });

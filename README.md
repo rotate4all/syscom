@@ -35,7 +35,7 @@ component by component.
   and big numbers, grouped in sections. Drag cards to reorder them, drag a corner to resize them (the content scales
   with the card, bar and line thickness included, and can be made thinner or thicker per card), choose where the value
   sits, put up to 3 sensors on one card (say CPU load with its power draw, each as a number, a small graph or both, on the
-  left, in the center or on the right, in one of four sizes),
+  left, in the center or on the right, in one of four sizes, with your own label),
   rename titles and subtitles, and start from a suggested layout. Every browser and phone that signs
   in sees the same layouts. Each PC has a desktop layout and a separate phone layout (its own cards, sensors and
   sections), and the phone preview lets you prepare the phone one from your PC.

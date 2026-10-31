@@ -155,22 +155,29 @@ body:not(.editing) .card { cursor: pointer; }
   font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text);
 }
 /* Same look as the main reading: the number in the text colour, the unit (and a name, if any) smaller and muted. */
-.card-extra .x-v { font-size: calc(clamp(11px, 6cqmin, 20px) * var(--xs, 1)); white-space: nowrap; }
+.card-extra .x-v { display: inline-flex; align-items: baseline; min-width: 0; font-size: calc(clamp(11px, 6cqmin, 20px) * var(--xs, 1)); white-space: nowrap; }
 .card-extra .x-name, .card-extra .x-unit { color: var(--muted); font-weight: 500; font-size: .78em; }
+.card-extra .x-num, .card-extra .x-unit { flex: none; }
+/* When space runs out the label gives way first (ellipsis), never the number. */
+.card-extra .x-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .card-extra .x-name:not(:empty) { margin-right: .35em; }
 .card-extra .x-unit:not(:empty) { margin-left: .2em; }
-/* Value-only readings share a line: left corner, center, right corner. */
-.card-extra .x-line { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; gap: 0 12px; overflow: hidden; }
-.card-extra .x-slot { display: flex; align-items: baseline; gap: 0 12px; min-width: 0; overflow: hidden; }
+/* Value-only readings share a line: left corner, center, right corner. With something in the center, the sides get
+   equal columns so it stays centered; otherwise the corners share the width as they need. */
+.card-extra .x-line { display: flex; justify-content: space-between; align-items: baseline; gap: 0 12px; overflow: hidden; }
+.card-extra .x-line.has-center { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.card-extra .x-slot { display: flex; align-items: baseline; gap: 0 12px; min-width: 0; }
+.card-extra .x-slot:empty { display: none; }
+.card-extra .x-line.has-center .x-slot:empty { display: flex; }
 .card-extra .x-left { justify-content: flex-start; }
 .card-extra .x-center { justify-content: center; }
-.card-extra .x-right { justify-content: flex-end; }
+.card-extra .x-right { justify-content: flex-end; margin-left: auto; }
 .card-extra .x-row { display: flex; align-items: center; gap: 8px; min-width: 0; height: calc(clamp(18px, 13cqh, 64px) * max(1, var(--xs, 1))); }
 .card-extra .x-row .x-v { flex: none; min-width: 4.5em; }
 .card-extra .x-row.x-at-right { flex-direction: row-reverse; }
-.card-extra .x-row.x-at-right .x-v { text-align: right; }
+.card-extra .x-row.x-at-right .x-v { justify-content: flex-end; }
 .card-extra .x-row.x-at-center { flex-direction: column; align-items: stretch; gap: 2px; height: auto; }
-.card-extra .x-row.x-at-center .x-v { text-align: center; }
+.card-extra .x-row.x-at-center .x-v { justify-content: center; }
 .card-extra .x-row.x-at-center canvas { flex: none; height: clamp(14px, 10cqh, 48px); }
 .card-extra .x-row canvas { flex: 1; min-width: 0; height: 100%; display: block; }
 @container card (max-height: 90px) { .card-extra { display: none; } }
@@ -359,7 +366,9 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .extra-list .x-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .extra-list .x-opts { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .extra-list .x-opts label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-.extra-list select:disabled { opacity: .5; }
+.extra-list select:disabled, .extra-list input:disabled { opacity: .5; }
+.extra-list .x-label { flex: 1 1 100%; }
+.extra-list .x-label input { flex: 1; min-width: 0; padding: 5px 8px; font-size: 13px; background: var(--surface); }
 .extra-list .n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .extra-list .n small { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .extra-list .v { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
