@@ -8,6 +8,14 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.18.1] - 2026-11-01
+
+### Fixed
+- **The setup ended with "Unable to execute file … syscom-tray.exe, CreateProcess failed; code 740"** when *Open
+  SYSCOM* was ticked on its last page. The tray app needs administrator rights, and the setup started it without
+  them. It now starts it with the setup's own rights. Nothing else was affected: SYSCOM was installed, and the tray
+  app was already running from its sign-in task. CI now checks that the setup starts the tray app this way.
+
 ## [0.18.0] - 2026-11-01
 
 ### Added

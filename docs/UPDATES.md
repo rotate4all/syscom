@@ -92,7 +92,7 @@ release built against that LHM version fixes it.
 
 ```json
 {
-  "syscom": "0.18.0",
+  "syscom": "0.18.1",
   "web": "0.18.0",
   "dotnet": { "channel": "10.0", "runtime": "latest" },
   "librehardwaremonitor": "0.9.6",
