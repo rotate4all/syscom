@@ -102,12 +102,21 @@ const
   ServiceName = 'SYSCOM';
   TaskName = 'SYSCOM Tray';
 
+{ Runs a program hidden and waits; logs the exit code, and its output when it failed (setup log, /LOG). }
 function Run(const Exe, Params: String): Integer;
 var
-  Code: Integer;
+  Code, I: Integer;
+  Output: TExecOutput;
 begin
-  if not Exec(Exe, Params, '', SW_HIDE, ewWaitUntilTerminated, Code) then Code := -1;
+  if not ExecAndCaptureOutput(Exe, Params, '', SW_HIDE, ewWaitUntilTerminated, Code, Output) then Code := -1;
   Log(Format('%s %s -> %d', [Exe, Params, Code]));
+  if Code <> 0 then
+  begin
+    for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+      if Trim(Output.StdOut[I]) <> '' then Log('    ' + Output.StdOut[I]);
+    for I := 0 to GetArrayLength(Output.StdErr) - 1 do
+      if Trim(Output.StdErr[I]) <> '' then Log('    ' + Output.StdErr[I]);
+  end;
   Result := Code;
 end;
 
@@ -173,25 +182,38 @@ begin
   StringChangeEx(Result, '>', '&gt;', True);
 end;
 
-{ The tray app at every logon of an administrator, elevated, on battery too, never stopped. }
+{ The tray app at every logon of an administrator, elevated, on battery too, never stopped: the same task install.ps1
+  registers, made the same way (PowerShell's ScheduledTasks module, with the Administrators group by its SID so it
+  works in every Windows language). If PowerShell is blocked, schtasks with the equivalent task XML. }
 procedure RegisterTrayTask;
 var
+  Tray, Script, Path: String;
   Xml: TArrayOfString;
-  Path: String;
 begin
+  Tray := ExpandConstant('{app}\syscom-tray.exe');
+  StringChangeEx(Tray, '''', '''''', True);
+  Script :=
+    '$ErrorActionPreference = ''Stop''; ' +
+    '$admins = (New-Object Security.Principal.SecurityIdentifier ''S-1-5-32-544'').Translate([Security.Principal.NTAccount]).Value; ' +
+    '$action = New-ScheduledTaskAction -Execute ''' + Tray + '''; ' +
+    '$trigger = New-ScheduledTaskTrigger -AtLogOn; ' +
+    '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0; ' +
+    '$principal = New-ScheduledTaskPrincipal -GroupId $admins -RunLevel Highest; ' +
+    'Register-ScheduledTask -TaskName ''' + TaskName + ''' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null';
+  if Run(Sys('WindowsPowerShell\v1.0\powershell.exe'), '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"') = 0 then Exit;
+
   Path := ExpandConstant('{tmp}\syscom-tray-task.xml');
   SetArrayLength(Xml, 1);
   Xml[0] :=
     '<?xml version="1.0" encoding="UTF-8"?>' + #13#10 +
     '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' +
-    '<RegistrationInfo><Description>SYSCOM tray icon: health, updates and phone setup.</Description></RegistrationInfo>' +
     '<Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>' +
     '<Principals><Principal id="Author"><GroupId>S-1-5-32-544</GroupId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>' +
     '<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' +
-    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>7</Priority></Settings>' +
+    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>' +
     '<Actions Context="Author"><Exec><Command>' + XmlEscape(ExpandConstant('{app}\syscom-tray.exe')) + '</Command></Exec></Actions>' +
     '</Task>';
-  SaveStringsToUTF8File(Path, Xml, False);
+  SaveStringsToUTF8FileWithoutBOM(Path, Xml, False);
   if Run(Sys('schtasks.exe'), '/Create /TN "' + TaskName + '" /XML "' + Path + '" /F') <> 0 then
     Log('Could not register the tray task; the tray app can still be opened from the Start menu.');
 end;
