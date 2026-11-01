@@ -40,23 +40,49 @@ public sealed class MetricsSession
         _devices = devices;
     }
 
-    public async Task RunAsync(CancellationToken ct)
+    /// <summary>
+    /// Serves the client until it goes away (<paramref name="ct"/>) or SYSCOM stops (<paramref name="stopping"/>).
+    /// A stopping server says goodbye right away (close code 1001, the page reconnects): an open dashboard must not
+    /// hold up a restart, or the Windows service runs into its 30 s shutdown limit and crashes.
+    /// </summary>
+    public async Task RunAsync(CancellationToken ct, CancellationToken stopping)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var lease = _hub.Subscribe(1000);
+        var stopped = new TaskCompletionSource();
+        using var onStop = stopping.Register(() => stopped.TrySetResult());
 
-        await SendCatalogIfChanged(cts.Token);
+        try { await SendCatalogIfChanged(cts.Token); } catch (Exception ex) when (ex is WebSocketException or OperationCanceledException) { return; }
         var receive = ReceiveLoop(lease, cts.Token);
         var send = SendLoop(lease, cts.Token);
 
-        await Task.WhenAny(receive, send);
+        await Task.WhenAny(receive, send, stopped.Task);
+        if (stopping.IsCancellationRequested) await CloseForShutdown();
         cts.Cancel();
         try { await Task.WhenAll(receive, send); } catch (OperationCanceledException) { } catch (WebSocketException) { }
 
         if (_ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
-            try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch (WebSocketException) { }
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            try { await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
+            catch (Exception ex) when (ex is WebSocketException or OperationCanceledException) { }
         }
+    }
+
+    private async Task CloseForShutdown()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            await _sendLock.WaitAsync(timeout.Token);
+            try
+            {
+                if (_ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
+                    await _ws.CloseOutputAsync(WebSocketCloseStatus.EndpointUnavailable, "SYSCOM is restarting", timeout.Token);
+            }
+            finally { _sendLock.Release(); }
+        }
+        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException) { }
     }
 
     private async Task ReceiveLoop(SensorHub.Lease lease, CancellationToken ct)

@@ -57,7 +57,7 @@ public static class PeerRelay
             if (path == "ws")
             {
                 if (!ctx.WebSockets.IsWebSocketRequest) return Results.BadRequest();
-                await RelayWebSocket(ctx, new UriBuilder(upstream) { Scheme = "ws", Path = "/ws", Query = ctx.Request.QueryString.Value }.Uri);
+                await RelayWebSocket(ctx, new UriBuilder(upstream) { Scheme = "ws", Path = "/ws", Query = ctx.Request.QueryString.Value }.Uri, app.Lifetime.ApplicationStopping);
                 return Results.Empty;
             }
             return await RelayHttp(ctx, http, new Uri(upstream, "/" + path + ctx.Request.QueryString.Value));
@@ -151,7 +151,7 @@ public static class PeerRelay
         return Results.Empty;
     }
 
-    private static async Task RelayWebSocket(HttpContext ctx, Uri url)
+    private static async Task RelayWebSocket(HttpContext ctx, Uri url, CancellationToken stopping)
     {
         using var upstream = new ClientWebSocket();
         upstream.Options.Proxy = null;
@@ -170,16 +170,20 @@ public static class PeerRelay
 
         using var client = await ctx.WebSockets.AcceptWebSocketAsync();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+        var stopped = new TaskCompletionSource();
+        using var onStop = stopping.Register(() => stopped.TrySetResult());   // this PC restarting must not wait for it
         var up = Pump(client, upstream, cts.Token);
         var down = Pump(upstream, client, cts.Token);
-        await Task.WhenAny(up, down);
+        await Task.WhenAny(up, down, stopped.Task);
         cts.Cancel();
         try { await Task.WhenAll(up, down); } catch (Exception) { /* one side went away */ }
         foreach (var ws in new WebSocket[] { client, upstream })
         {
             if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
-                try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch (Exception) { }
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                try { await ws.CloseOutputAsync(stopping.IsCancellationRequested ? WebSocketCloseStatus.EndpointUnavailable : WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
+                catch (Exception) { }
             }
         }
     }

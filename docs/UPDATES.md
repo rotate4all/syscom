@@ -59,7 +59,8 @@ Nothing is installed without the publisher's checksum:
 3. If files in the install folder must change (or a restart is needed), the server copies `syscom-updater` into that
    run folder, writes `plan.json` and starts it. When SYSCOM itself is updated, that is the **new** version's updater
    (unless it needs a newer .NET than the one installed).
-4. The updater stops the **SYSCOM** service, backs up every file it will overwrite into `backup\`, copies the
+4. The updater stops the **SYSCOM** service (and waits until its process has exited, not only until Windows reports it
+   stopped), backs up every file it will overwrite into `backup\`, copies the
    new files, starts the service and polls `http://127.0.0.1:<port>/api/health` for up to 60 s. If the service
    stops on its own, it fails fast instead of waiting.
    - Files another program has open can't be overwritten on Windows; the running tray app's are. Those are renamed
@@ -87,7 +88,7 @@ release built against that LHM version fixes it.
 
 ```json
 {
-  "syscom": "0.17.1",
+  "syscom": "0.17.2",
   "web": "0.17.0",
   "dotnet": { "channel": "10.0", "runtime": "latest" },
   "librehardwaremonitor": "0.9.6",

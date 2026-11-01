@@ -8,6 +8,21 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.17.2] - 2026-11-01
+
+### Fixed
+- **SYSCOM took 30 seconds to stop, then crashed, whenever a dashboard was open** (a phone on the wall, a browser
+  tab). Each open dashboard kept the server waiting until Windows' time limit ran out. Open dashboards (direct and
+  relayed) are now told right away that SYSCOM is restarting, and reconnect when it's back; stopping takes a moment.
+  A stop that still runs out of time ends quietly instead of crashing.
+- **install.ps1 failed halfway with "file is being used by another process"** and closed its window. Windows reports
+  the service as stopped before its process has exited (a crashing one lingers while its crash dump is written), so
+  the installer started copying too early. The installer (and the updater, and uninstall.ps1) now wait for the process
+  itself to exit, stop anything else still running from the install folder, and retry a locked file a few times.
+- **The installer's window closed before you could read it.** When it restarts itself as administrator, the window
+  now stays open at the end, showing the addresses and password or what went wrong. Everything it shows is also
+  written to `%ProgramData%\SYSCOM\install.log`.
+
 ## [0.17.1] - 2026-11-01
 
 ### Fixed

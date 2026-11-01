@@ -20,7 +20,13 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 Get-Process syscom-tray -ErrorAction SilentlyContinue | Stop-Process -Force
 Unregister-ScheduledTask -TaskName 'SYSCOM Tray' -Confirm:$false -ErrorAction SilentlyContinue
 if (Get-Service SYSCOM -ErrorAction SilentlyContinue) {
+    $servicePid = (Get-CimInstance Win32_Service -Filter "Name='SYSCOM'").ProcessId
     Stop-Service SYSCOM -Force -ErrorAction SilentlyContinue
+    # "Stopped" comes before the process is gone; its files can't be deleted until then.
+    if ($servicePid) {
+        Wait-Process -Id $servicePid -Timeout 60 -ErrorAction SilentlyContinue
+        Get-Process -Id $servicePid -ErrorAction SilentlyContinue | Stop-Process -Force
+    }
     & sc.exe delete SYSCOM | Out-Null
 }
 Get-NetFirewallRule -DisplayName 'SYSCOM*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule

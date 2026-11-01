@@ -17,7 +17,8 @@ param(
     [int]$DiscoveryPort = 47811,
     [int]$HttpsPort = 47812,
     [switch]$SkipPawnIO,
-    [switch]$NoTray
+    [switch]$NoTray,
+    [switch]$Pause   # keep the window open at the end (set when the script restarts itself as administrator)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,9 +27,21 @@ $service = 'SYSCOM'
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host 'Restarting as administrator…'
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -InstallDir `"$InstallDir`" -Port $Port -DiscoveryPort $DiscoveryPort -HttpsPort $HttpsPort$(if ($SkipPawnIO) {' -SkipPawnIO'})$(if ($NoTray) {' -NoTray'})"
+    Write-Host 'Restarting as administrator...'
+    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -InstallDir `"$InstallDir`" -Port $Port -DiscoveryPort $DiscoveryPort -HttpsPort $HttpsPort -Pause$(if ($SkipPawnIO) {' -SkipPawnIO'})$(if ($NoTray) {' -NoTray'})"
     exit
+}
+
+# A copy of everything shown goes to %ProgramData%\SYSCOM\install.log, and a failure keeps the window open.
+$logDir = Join-Path $env:ProgramData 'SYSCOM'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+try { Start-Transcript -Path (Join-Path $logDir 'install.log') -Force | Out-Null } catch { }
+trap {
+    Write-Host "`nInstalling SYSCOM failed: $_" -ForegroundColor Red
+    Write-Host "Nothing was started. Fix the cause and run install.ps1 again; details: $(Join-Path $logDir 'install.log')"
+    try { Stop-Transcript | Out-Null } catch { }
+    if ($Pause) { Read-Host 'Press Enter to close' | Out-Null }
+    exit 1
 }
 if (-not (Test-Path (Join-Path $source 'syscom.exe'))) { throw "Run this script from the extracted SYSCOM package folder." }
 
@@ -38,16 +51,36 @@ function Step($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
 Step 'Stopping running SYSCOM (if any)'
 Get-Process syscom-tray -ErrorAction SilentlyContinue | Stop-Process -Force
 if (Get-Service $service -ErrorAction SilentlyContinue) {
+    $servicePid = (Get-CimInstance Win32_Service -Filter "Name='$service'").ProcessId
     Stop-Service $service -Force -ErrorAction SilentlyContinue
-    (Get-Service $service).WaitForStatus('Stopped', '00:00:30')
+    (Get-Service $service).WaitForStatus('Stopped', '00:01:00')
+    # "Stopped" comes before the process is gone (a crashing one lingers while Windows writes its dump), and until
+    # then its files can't be replaced.
+    if ($servicePid) {
+        Wait-Process -Id $servicePid -Timeout 60 -ErrorAction SilentlyContinue
+        Get-Process -Id $servicePid -ErrorAction SilentlyContinue | Stop-Process -Force
+    }
 }
+# Anything else still running from the install folder (an updater mid-run, a server started by hand).
+$installPrefix = $InstallDir.TrimEnd('\').ToLowerInvariant() + '\'
+Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.ToLowerInvariant().StartsWith($installPrefix) } |
+    ForEach-Object { Write-Host "    stopping $($_.Name) ($($_.Id))"; $_ | Stop-Process -Force; $_.WaitForExit(10000) | Out-Null }
 
 # ---------------------------------------------------------------- files
 Step "Copying files to $InstallDir"
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $exclude = 'install.ps1', 'uninstall.ps1', 'README.txt'
-Get-ChildItem $source | Where-Object { $_.Name -notin $exclude } | ForEach-Object {
-    Copy-Item $_.FullName -Destination $InstallDir -Recurse -Force
+foreach ($item in @(Get-ChildItem $source | Where-Object { $_.Name -notin $exclude })) {
+    # A file can stay locked for a moment after its program exits (antivirus scans, crash dumps): retry a few times.
+    for ($try = 1; ; $try++) {
+        try { Copy-Item $item.FullName -Destination $InstallDir -Recurse -Force; break }
+        catch {
+            if ($try -ge 6) { throw }
+            Write-Host "    $($_.Exception.Message) Retrying..."
+            Start-Sleep -Seconds 3
+        }
+    }
 }
 Copy-Item (Join-Path $source 'uninstall.ps1') $InstallDir -Force
 # Old program files an in-app update had to rename aside because they were in use.
@@ -149,3 +182,5 @@ foreach ($ip in $ips) { Write-Host "  Dashboard:  http://${ip}:$Port" }
 if ($ips) { Write-Host "  Phone app:  http://$($ips[0]):$Port/trust  (or tray icon > Set up phone)" }
 if (Test-Path $pwFile) { Write-Host "  Password:   $(Get-Content $pwFile)  (change it from the tray app)" }
 Write-Host '  Manage it from the SYSCOM icon in the notification area, or Start menu > SYSCOM.'
+try { Stop-Transcript | Out-Null } catch { }
+if ($Pause) { Read-Host "`nPress Enter to close" | Out-Null }

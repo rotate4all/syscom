@@ -313,7 +313,7 @@ app.Map("/ws", async (HttpContext ctx) =>
         await ws.CloseAsync((System.Net.WebSockets.WebSocketCloseStatus)MetricsSession.CloseUnauthorized, "unauthorized", ctx.RequestAborted);
         return;
     }
-    await new MetricsSession(ws, hub, dashboards, deviceList).RunAsync(ctx.RequestAborted);
+    await new MetricsSession(ws, hub, dashboards, deviceList).RunAsync(ctx.RequestAborted, app.Lifetime.ApplicationStopping);
 });
 
 // ---- certificate for phones (public: it's a CA certificate, no secrets)
@@ -409,7 +409,16 @@ app.Lifetime.ApplicationStarted.Register(() =>
     Console.WriteLine();
 });
 
-app.Run();
+try
+{
+    app.Run();
+}
+catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+{
+    // Stopping took longer than the host allows (30 s). The service has already reported "stopped"; exit quietly
+    // instead of crashing, which would leave the process (and its files) around while Windows writes a crash dump.
+    Console.Error.WriteLine("Shutdown timed out.");
+}
 return 0;
 
 TlsManager? TryCreateTls()

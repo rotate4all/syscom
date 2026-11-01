@@ -68,18 +68,17 @@ void StopServer()
 {
     if (!string.IsNullOrEmpty(plan.ServiceName))
     {
+        var pid = ServicePid(plan.ServiceName);
         Sc("stop", plan.ServiceName);
         var deadline = DateTime.UtcNow.AddSeconds(60);
         while (DateTime.UtcNow < deadline && !Sc("query", plan.ServiceName).Contains("STOPPED")) Thread.Sleep(500);
+        // "Stopped" is reported before the process is gone (a crashing one stays while Windows writes its dump),
+        // and until then it keeps its files open.
+        if (pid is { } id) WaitForExit(id, TimeSpan.FromSeconds(30));
     }
     else if (plan.ServerPid is { } pid)
     {
-        try
-        {
-            using var p = Process.GetProcessById(pid);
-            if (!p.WaitForExit(30_000)) { p.Kill(entireProcessTree: true); p.WaitForExit(10_000); }
-        }
-        catch (ArgumentException) { /* already gone */ }
+        WaitForExit(pid, TimeSpan.FromSeconds(30));
     }
     // Give Windows a moment to release file handles (not for a shared `dotnet` host outside the install folder).
     if (Path.GetFullPath(plan.ServerExe).StartsWith(Path.GetFullPath(plan.InstallDir), StringComparison.OrdinalIgnoreCase))
@@ -241,6 +240,29 @@ static void WaitUnlocked(string file, TimeSpan timeout)
         catch (IOException) { Thread.Sleep(500); }
         catch (UnauthorizedAccessException) { return; }
     }
+}
+
+// The service's process id from `sc queryex` ("PID : 1234"), or null when it isn't running.
+static int? ServicePid(string service)
+{
+    foreach (var line in Sc("queryex", service).Split('\n'))
+    {
+        var parts = line.Split(':', 2);
+        if (parts.Length == 2 && parts[0].Trim() == "PID" && int.TryParse(parts[1].Trim(), out var pid) && pid > 0) return pid;
+    }
+    return null;
+}
+
+static void WaitForExit(int pid, TimeSpan timeout)
+{
+    try
+    {
+        using var p = Process.GetProcessById(pid);
+        if (!p.WaitForExit(timeout)) { p.Kill(entireProcessTree: true); p.WaitForExit(10_000); }
+    }
+    catch (ArgumentException) { /* already gone */ }
+    catch (InvalidOperationException) { /* already gone */ }
+    catch (System.ComponentModel.Win32Exception) { /* not ours to wait for */ }
 }
 
 static string Sc(string verb, string service)
