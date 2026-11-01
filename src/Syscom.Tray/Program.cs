@@ -27,8 +27,10 @@ internal static class Program
         }
 
         StartupVersion = VersionOnDisk() ?? RunningVersion;
+        Taskbar.AllowCreatedMessage();
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext(openWindow: args.Contains("--open"), show));
+        // The sign-in task starts it without arguments; the Start menu passes --open, a restart after an update --restarted.
+        Application.Run(new TrayContext(openWindow: args.Contains("--open"), atSignIn: args.Length == 0, show));
         ReleaseSingleInstance();
     }
 
@@ -76,9 +78,10 @@ internal sealed class TrayContext : ApplicationContext
     private string _notifiedUpdates = "";
     private Health _shown = (Health)(-1);
     private bool _restartingTray;
+    private IntPtr _taskbar = Taskbar.Handle;
     private readonly RegisteredWaitHandle _showWait;
 
-    public TrayContext(bool openWindow, EventWaitHandle show)
+    public TrayContext(bool openWindow, bool atSignIn, EventWaitHandle show)
     {
         var menu = new ContextMenuStrip();
         // Another start of the tray app (Start menu → SYSCOM) asks this one to show its window.
@@ -98,7 +101,12 @@ internal sealed class TrayContext : ApplicationContext
             foreach (ToolStripMenuItem item in style.DropDownItems) item.Checked = (IconStyle)item.Tag! == TraySettings.Style;
         };
         menu.Items.Add(style);
-        menu.Items.Add("Restart server", null, async (_, _) => await Try(async () => (await _client.RestartAsync()).Message));
+        menu.Items.Add("Restart server", null, async (_, _) => await Try(async () =>
+        {
+            if (AdminClient.ServiceState() != "STOPPED") return (await _client.RestartAsync()).Message;
+            AdminClient.StartService();
+            return "Starting SYSCOM.";
+        }));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit tray app", null, (_, _) => ExitThread());
 
@@ -109,8 +117,15 @@ internal sealed class TrayContext : ApplicationContext
         _icon.DoubleClick += (_, _) => ShowWindow();
         _icon.BalloonTipClicked += (_, _) => ShowWindow();
 
-        _timer.Tick += async (_, _) => await RefreshAsync();
+        _timer.Tick += async (_, _) => { CheckTaskbar(); await RefreshAsync(); };
         _timer.Start();
+        // At sign-in, SYSCOM's service should be running. If it isn't (it failed while Windows started, say), start it,
+        // unless someone set it to start manually or disabled it. Only then: an update stops it for a moment, too.
+        if (atSignIn)
+            _ = Task.Run(() =>
+            {
+                if (AdminClient.ServiceState() == "STOPPED" && AdminClient.StartsAutomatically()) AdminClient.StartService();
+            });
         _ = RefreshAsync();
         if (openWindow) ShowWindow();
         _ = Shortcuts.CleanUpOldFiles();
@@ -184,6 +199,20 @@ internal sealed class TrayContext : ApplicationContext
             // Keep running the old one; the next start of Windows starts the new one.
             _icon.ShowBalloonTip(6000, "SYSCOM", $"Could not restart the tray app: {ex.Message}", ToolTipIcon.Warning);
         }
+    }
+
+    /// <summary>
+    /// Adds the icon again when a new taskbar shows up. NotifyIcon does that on Explorer's "TaskbarCreated" message
+    /// (see <see cref="Taskbar"/>); this covers the case where the message never arrives.
+    /// </summary>
+    private void CheckTaskbar()
+    {
+        var taskbar = Taskbar.Handle;
+        if (taskbar == _taskbar) return;
+        _taskbar = taskbar;
+        if (taskbar == IntPtr.Zero) return;
+        _icon.Visible = false;
+        _icon.Visible = true;
     }
 
     private void Redraw()

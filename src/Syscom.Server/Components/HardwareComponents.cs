@@ -32,6 +32,7 @@ public sealed class LhmComponent : Component
         if (!OperatingSystem.IsWindows()) return (Health.Unknown, "Windows only (mock sensors in use)");
         if (!File.Exists(DllPath)) return (Health.Error, "Library missing; no hardware sensors");
         if (_hub.SourceError("LibreHardwareMonitor") is { } err) return (Health.Error, err);
+        if (!_hub.Ready) return (Health.Unknown, "Finding sensors…");
         var count = _hub.Catalog.Count(s => !s.Id.StartsWith("/drive/"));
         return count > 0 ? (Health.Ok, $"{count} sensors") : (Health.Warning, "Loaded, but no sensors found");
     }

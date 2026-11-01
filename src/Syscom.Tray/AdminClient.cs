@@ -118,6 +118,9 @@ public sealed class AdminClient : IDisposable
 
     public static void StartService() => Sc("start");
 
+    /// <summary>Whether Windows starts the service by itself (automatic start, as the setup sets it up).</summary>
+    public static bool StartsAutomatically() => Sc("qc").Contains("AUTO_START");
+
     private static string Sc(string verb)
     {
         try

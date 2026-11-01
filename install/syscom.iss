@@ -230,8 +230,9 @@ begin
   else
     Run(Sys('sc.exe'), 'config ' + ServiceName + ' binPath= "\"' + Exe + '\"" start= auto');
   Run(Sys('sc.exe'), 'description ' + ServiceName + ' "Streams this PC''s hardware sensors to the SYSCOM web dashboard on your network."');
-  { Restart automatically if it ever crashes. }
+  { Restart automatically if it ever crashes, or stops with an error. }
   Run(Sys('sc.exe'), 'failure ' + ServiceName + ' reset= 86400 actions= restart/5000/restart/10000/restart/30000');
+  Run(Sys('sc.exe'), 'failureflag ' + ServiceName + ' 1');
 end;
 
 { Lets SYSCOM's dashboard (TCP) and LAN discovery (UDP) through, on private networks only. }

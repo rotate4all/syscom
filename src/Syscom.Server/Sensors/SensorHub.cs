@@ -36,8 +36,10 @@ public sealed class SensorHub : BackgroundService
         _sources = sources.ToList();
         _cfg = cfg;
         _log = log;
-        Poll(); // populate the catalog before the first client arrives
     }
+
+    /// <summary>Whether the sensors have been read once (the first read finds the hardware, see <see cref="ExecuteAsync"/>).</summary>
+    public bool Ready { get; private set; }
 
     public Snapshot Latest => _latest;
     public IReadOnlyList<SensorInfo> Catalog => _catalog;
@@ -81,6 +83,14 @@ public sealed class SensorHub : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        // The first read finds the hardware, which can take a while as Windows starts. It runs here, after SYSCOM has
+        // told Windows the service started and while the web server starts; browsers get the sensors when it's done.
+        await Task.Yield();
+        var scan = Stopwatch.StartNew();
+        Poll();
+        Ready = true;
+        _log.LogInformation("Found {Count} sensors in {Seconds:0.0} s", _catalog.Count, scan.Elapsed.TotalSeconds);
+
         while (!ct.IsCancellationRequested)
         {
             var api = Environment.TickCount64 < Volatile.Read(ref _apiUntil);

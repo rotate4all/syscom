@@ -167,6 +167,17 @@ var apiKeys = app.Services.GetRequiredService<ApiKeyStore>();
 if (cfg.HistoryEnabled) hub.Polled += history.Add;
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 InstallEntry.SyncVersion(version, app.Logger);
+#if WINDOWS
+// A part of SYSCOM that fails stops it. Tell Windows the service stopped with an error, so its recovery settings
+// start it again (the setup turns them on for that too) instead of leaving it stopped until the next boot.
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    if (OperatingSystem.IsWindows()
+        && app.Services.GetServices<IHostedService>().OfType<BackgroundService>().Any(s => s.ExecuteTask?.IsFaulted == true)
+        && app.Services.GetService<IHostLifetime>() is System.ServiceProcess.ServiceBase service)
+        service.ExitCode = 1;
+});
+#endif
 
 // A signed-in dashboard (session token) may do everything below; API keys may read (read keys) or also change the
 // dashboard and device list (full keys). See Api/ApiAccess.cs.
@@ -189,7 +200,10 @@ api.MapGet("/info", () => Results.Ok(new
     sources = hub.SourceNames,
 }));
 
-api.MapGet("/health", () => Results.Ok(new { status = "ok", version, sensors = hub.Catalog.Count }));
+// ?ready=true answers 503 until the sensors have been read once: the updater rolls back a version that never gets there.
+api.MapGet("/health", (bool? ready) => ready == true && !hub.Ready
+    ? Results.Json(new { status = "starting", version, sensors = 0 }, statusCode: StatusCodes.Status503ServiceUnavailable)
+    : Results.Ok(new { status = "ok", version, sensors = hub.Catalog.Count }));
 
 api.MapPost("/login", (HttpContext ctx, LoginRequest body) =>
 {
@@ -384,7 +398,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
 {
     Console.WriteLine();
     Console.WriteLine($"  SYSCOM {version}  ·  {cfg.Name}");
-    Console.WriteLine($"  Sensors: {string.Join(", ", hub.SourceNames)} ({hub.Catalog.Count})");
+    Console.WriteLine($"  Sensors: {string.Join(", ", hub.SourceNames)}");
     var addresses = LanDiscovery.LocalAddressesRanked().ToList();
     var lan = addresses.FirstOrDefault().Address ?? "<this PC>";
     Console.WriteLine($"  Open:    http://{lan}:{cfg.Port}   (on this PC: http://localhost:{cfg.Port})");

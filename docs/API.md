@@ -1039,7 +1039,7 @@ a read key can't change anything, and only a signed-in dashboard can renew its t
 | Method | Path | Auth | Response |
 | --- | --- | --- | --- |
 | GET | `/api/info` | none | `{ id, name, version, os, minIntervalMs, port, httpsPort, caFingerprint, caName, sources[] }`. `httpsPort` and the CA fields are `null` when HTTPS is off. |
-| GET | `/api/health` | none | `{ status: "ok", version, sensors }`, used by the updater and installer |
+| GET | `/api/health` | none | `{ status: "ok", version, sensors }`, used by the updater and installer. With `?ready=true`: `503` and `status: "starting"` until the sensors have been read once after a start (the updater waits for that). |
 | POST | `/api/login` | none | body `{ password }` → `{ token, expiresInDays }`. `401` wrong password. `429` + `Retry-After` when locked out (5 failures → 15 s, doubling, max 5 min). |
 | POST | `/api/token` | dashboard | a fresh token for a signed-in browser: `{ token, expiresInDays }`. The dashboard renews once a day, so a sign-in lasts `TokenLifetimeDays` (30) after its last use. |
 | GET | `/api/keys` | dashboard | the API keys: `[ { id, name, access, prefix, created, lastUsed } ]` (the keys themselves are never stored, only a hash) |

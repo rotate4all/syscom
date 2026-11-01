@@ -141,11 +141,25 @@ runs, its buttons stay disabled until the updater's result arrives. When an upda
 server is back on that version, it starts the new copy (`--restarted`, which waits for the old one to exit) and
 exits. It also creates the Start menu entries when they are missing and deletes its own `*.syscom-old` leftovers.
 
+At sign-in it often starts before Explorer has made the taskbar. Its icon then comes back when Explorer announces
+the taskbar ("TaskbarCreated", which an elevated app must let through: `Taskbar.cs`), and if that message never
+arrives, when it sees a new taskbar window on its next refresh. If the service is set to start automatically but is
+stopped when the tray app starts, the tray app starts it.
+
+## Starting with Windows
+
+The service starts automatically, and Windows waits only 30 s for a service to report that it started (and doesn't
+retry if it doesn't). So `syscom.exe` reports to Windows before it touches the hardware: LibreHardwareMonitor finds
+the devices (which can take long while Windows starts: every drive's health data is read) on the sensor loop's first
+read, while the web server already answers; browsers get the sensors when it's done. Its recovery settings restart
+it 5, 10 and 30 s after a crash, or after it stopped because a part of it failed (it then reports an error exit
+code).
+
 ## Updater (`src/Syscom.Updater`)
 
 A small console app the server launches, from a copy in `%ProgramData%\SYSCOM\updates\<run>\updater`, so it can
 replace its own files (the new version's copy when SYSCOM itself is updated). It stops the service, backs up and
-swaps files, starts the service, waits for `/api/health`, and rolls back on failure. A file another program has open
+swaps files, starts the service, waits for `/api/health?ready=true` (sensors read), and rolls back on failure. A file another program has open
 (the running tray app's) is renamed to `*.syscom-old` and replaced; the server deletes those leftovers when it
 starts. It writes `last-result.json`, which the server re-reads when it changes and the tray app shows.
 
