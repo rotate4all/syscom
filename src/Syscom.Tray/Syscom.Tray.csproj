@@ -7,6 +7,8 @@
     <AssemblyName>syscom-tray</AssemblyName>
     <RootNamespace>Syscom.Tray</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Start menu and Explorer icon (the notification-area icon is drawn at run time to show health). -->
+    <ApplicationIcon>syscom.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

@@ -20,11 +20,22 @@ internal sealed class MainForm : Form
     private readonly Button _check = new() { Text = "Check for updates", AutoSize = true };
     private readonly Button _updateSelected = new() { Text = "Update selected", AutoSize = true };
     private readonly Button _updateAll = new() { Text = "Update all", AutoSize = true };
+    private readonly Button _restart = new() { Text = "Restart server", AutoSize = true };
+    private readonly ProgressBar _progress = new()
+    {
+        Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 25, Width = 140, Height = 16, Visible = false,
+        Margin = new Padding(10, 9, 0, 0),
+    };
     private readonly ComboBox _autoUpdate = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 300 };
     private readonly ComboBox _trayStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     private bool _busy;
+    private bool _refreshing;
     private bool _settingsLoaded;
+    private bool _askedToStart;
+    // Set while SYSCOM restarts to install updates (or for a restart): the window waits until the updater reports back.
+    private DateTimeOffset? _waitingSince;
+    private static readonly TimeSpan WaitLimit = TimeSpan.FromMinutes(4);
 
     private static readonly (string Value, string Label)[] AutoUpdateChoices =
     {
@@ -68,11 +79,10 @@ internal sealed class MainForm : Form
         };
         var pwd = new Button { Text = "Change password…", AutoSize = true };
         pwd.Click += async (_, _) => await ChangePasswordAsync();
-        var restart = new Button { Text = "Restart server", AutoSize = true };
-        restart.Click += async (_, _) => await RunAsync(() => _client.RestartAsync());
+        _restart.Click += async (_, _) => await RunAsync("Restarting SYSCOM…", () => _client.RestartAsync());
         var data = new Button { Text = "Open data folder", AutoSize = true };
         data.Click += (_, _) => Process.Start(new ProcessStartInfo(SyscomPaths.DataDir) { UseShellExecute = true });
-        right.Controls.AddRange(new Control[] { open, phone, pwd, restart, data });
+        right.Controls.AddRange(new Control[] { open, phone, pwd, _restart, data });
         header.Controls.Add(left, 0, 0);
         header.Controls.Add(right, 1, 0);
 
@@ -102,7 +112,7 @@ internal sealed class MainForm : Form
         Disposed += (_, _) => TraySettings.Changed -= SyncTrayStyle;
 
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 0) };
-        footer.Controls.AddRange(new Control[] { _check, _updateSelected, _updateAll, _status });
+        footer.Controls.AddRange(new Control[] { _check, _updateSelected, _updateAll, _progress, _status });
         _status.Padding = new Padding(8, 7, 0, 0);
 
         _check.Click += async (_, _) => await CheckForUpdatesAsync();
@@ -110,9 +120,9 @@ internal sealed class MainForm : Form
         {
             var ids = _list.CheckedItems.Cast<ListViewItem>().Select(i => (string)i.Tag!).ToList();
             if (ids.Count == 0) { _status.Text = "Tick the components to update first."; return; }
-            await RunAsync(() => _client.UpdateAsync(ids));
+            await RunAsync("Downloading updates…", () => _client.UpdateAsync(ids));
         };
-        _updateAll.Click += async (_, _) => await RunAsync(() => _client.UpdateAsync(Array.Empty<string>()));
+        _updateAll.Click += async (_, _) => await RunAsync("Downloading updates…", () => _client.UpdateAsync(Array.Empty<string>()));
 
         Controls.Add(_list);
         Controls.Add(componentsLabel);
@@ -122,6 +132,7 @@ internal sealed class MainForm : Form
 
         _timer.Tick += async (_, _) => await RefreshAsync();
         Shown += async (_, _) => { await RefreshAsync(); _timer.Start(); };
+        _status.TextChanged += (_, _) => _status.ForeColor = SystemColors.GrayText;
         FormClosing += (_, e) =>
         {
             // Closing the window keeps the tray app running.
@@ -156,12 +167,20 @@ internal sealed class MainForm : Form
         }
     }
 
+    // Runs every few seconds, also while busy: the component list then shows what each one is doing (downloading, …).
     private async Task RefreshAsync()
     {
-        if (_busy) return;
+        if (_refreshing) return;
+        _refreshing = true;
         try
         {
             var status = await _client.StatusAsync();
+            _askedToStart = false;
+            if (_waitingSince is { } since)
+            {
+                if (status?.LastUpdate is { } done && done.Time >= since) EndWait(done.Message, done.Success);
+                else if (DateTimeOffset.Now - since > WaitLimit) EndWait("SYSCOM is running but did not report how the update went. Details: updater.log in the data folder (updates).", false);
+            }
             if (status is not null)
             {
                 _title.Text = $"{status.Name}";
@@ -178,7 +197,7 @@ internal sealed class MainForm : Form
                     }
                 }
                 if (status.LastUpdate is { } last && string.IsNullOrEmpty(_status.Text))
-                    _status.Text = $"Last update {last.Time:g}: {last.Message}";
+                    ShowResult($"Last update {last.Time:g}: {last.Message}", last.Success);
             }
             var initial = AdminClient.InitialPassword();
             _password.Text = initial is null
@@ -196,13 +215,31 @@ internal sealed class MainForm : Form
         catch (Exception)
         {
             var state = AdminClient.ServiceState();
-            _title.Text = "SYSCOM is not running";
-            _summary.Text = state is null ? "The SYSCOM service is not installed. Run install.ps1 as administrator." : $"Service state: {state}";
-            if (state == "STOPPED" && MessageBox.Show(this, "The SYSCOM service is stopped. Start it now?", "SYSCOM",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            if (_waitingSince is { } since)
             {
-                AdminClient.StartService();
+                // The updater stopped SYSCOM to swap its files; it starts it again (or the previous version) by itself.
+                _title.Text = "SYSCOM is restarting…";
+                _summary.Text = state is null ? "" : $"Service state: {state}";
+                if (DateTimeOffset.Now - since > WaitLimit)
+                    EndWait("SYSCOM has not come back. Details: updater.log in the data folder (updates).", false);
             }
+            else
+            {
+                _title.Text = "SYSCOM is not running";
+                _summary.Text = state is null ? "The SYSCOM service is not installed. Run install.ps1 as administrator." : $"Service state: {state}";
+                // Ask once per stop, not on every refresh.
+                if (state == "STOPPED" && !_askedToStart && Visible)
+                {
+                    _askedToStart = true;
+                    if (MessageBox.Show(this, "The SYSCOM service is stopped. Start it now?", "SYSCOM",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                        AdminClient.StartService();
+                }
+            }
+        }
+        finally
+        {
+            _refreshing = false;
         }
     }
 
@@ -238,37 +275,58 @@ internal sealed class MainForm : Form
         Icon = Icons.Status(comps.Select(c => c.Health).DefaultIfEmpty(Health.Ok).Max());
     }
 
-    private async Task RunAsync(Func<Task<string>> action)
+    /// <summary>
+    /// Runs an update or restart with the buttons disabled and a progress bar. When SYSCOM restarts for it, the
+    /// window keeps waiting until the updater reports how it went (or a few minutes pass).
+    /// </summary>
+    private async Task RunAsync(string working, Func<Task<UpdateOutcome>> action)
     {
         if (_busy) return;
-        SetBusy(true, "Working…");
+        var since = DateTimeOffset.Now.AddSeconds(-2);
+        SetBusy(true, working);
         try
         {
-            _status.Text = await action();
+            var outcome = await action();
+            _status.Text = outcome.Message;
+            if (outcome.Restarting) { _waitingSince = since; return; }   // stays busy until SYSCOM is back
         }
         catch (Exception ex)
         {
-            _status.Text = ex.Message;
+            ShowResult(ex.Message, false);
         }
-        finally
-        {
-            SetBusy(false);
-        }
+        SetBusy(false);
+        await RefreshAsync();
+    }
+
+    private void EndWait(string message, bool success)
+    {
+        _waitingSince = null;
+        SetBusy(false);
+        ShowResult(message, success);
+    }
+
+    private void ShowResult(string message, bool success)
+    {
+        _status.Text = message;
+        _status.ForeColor = success ? SystemColors.GrayText : Color.Firebrick;
     }
 
     private async Task ChangePasswordAsync()
     {
         using var dlg = new PasswordDialog();
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        await RunAsync(() => _client.SetPasswordAsync(dlg.Password));
+        if (dlg.ShowDialog(this) != DialogResult.OK || _busy) return;
+        SetBusy(true, "Saving…");
+        try { _status.Text = await _client.SetPasswordAsync(dlg.Password); }
+        catch (Exception ex) { ShowResult(ex.Message, false); }
+        SetBusy(false);
         await RefreshAsync();
     }
 
     private void SetBusy(bool busy, string? message = null)
     {
         _busy = busy;
-        _check.Enabled = _updateSelected.Enabled = _updateAll.Enabled = !busy;
-        UseWaitCursor = busy;
+        _check.Enabled = _updateSelected.Enabled = _updateAll.Enabled = _restart.Enabled = !busy;
+        _progress.Visible = busy;
         if (message is not null) _status.Text = message;
     }
 

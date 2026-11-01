@@ -34,6 +34,97 @@ jobs:
         shell: pwsh
         run: Get-ChildItem web/js/*.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit 1 } }
 
+  update:
+    # In-app update of an installed copy while its tray app runs: a build is updated through the management API to a
+    # newer build served from a local feed. Windows doesn't let a running program's files be overwritten, so the
+    # tray app's files are held open the same way; the updater must swap them, not roll the update back.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Update while the tray app runs, then restart
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $t = Join-Path $env:RUNNER_TEMP 'update-test'
+          $inst = "$t\inst"; $new = "$t\new"; $feed = "$t\feed"; $cfg = "$t\config.json"
+          New-Item -ItemType Directory -Force $inst, $new, $feed | Out-Null
+          foreach ($p in 'Syscom.Server', 'Syscom.Updater', 'Syscom.Tray') {
+            dotnet publish "src/$p" -c Release -r win-x64 --self-contained false -o $inst -p:SyscomVersion=0.0.1 -v q
+            if ($LASTEXITCODE) { exit 1 }
+            dotnet publish "src/$p" -c Release -r win-x64 --self-contained false -o $new -p:SyscomVersion=9.9.9 -v q
+            if ($LASTEXITCODE) { exit 1 }
+          }
+          Copy-Item web "$inst\web" -Recurse
+          Compress-Archive "$new\*" "$feed\app.zip"
+          $sha = (Get-FileHash "$feed\app.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          @{ syscom = @{ version = '9.9.9'; url = 'http://127.0.0.1:8099/app.zip'; sha256 = $sha } } | ConvertTo-Json | Set-Content "$feed\feed.json"
+          # The runner image's Python serves the local update feed.
+          $feedServer = Start-Process python -ArgumentList '-m', 'http.server', '8099', '--bind', '127.0.0.1', '--directory', $feed -PassThru -WindowStyle Hidden
+          @{ Port = 47830; HttpsPort = 47832; DiscoveryPort = 47831; UpdateFeedUrl = 'http://127.0.0.1:8099/feed.json'; AutoCheckUpdates = $false } |
+            ConvertTo-Json | Set-Content $cfg
+
+          # Windows opens a running program's files for reading with rename allowed, so they can't be overwritten.
+          # (A held handle that allows renaming also allows deleting, which a running program's files don't.)
+          $held = 'syscom-tray.exe', 'syscom-tray.dll' | ForEach-Object { [IO.File]::Open("$inst\$_", 'Open', 'Read', [IO.FileShare]'Read, Delete') }
+
+          Start-Process dotnet -ArgumentList "`"$inst\syscom.dll`"", '--mock', '--config', "`"$cfg`"" -WorkingDirectory $inst -WindowStyle Hidden
+          $api = 'http://127.0.0.1:47830/api'
+          foreach ($i in 1..60) { try { Invoke-RestMethod "$api/health" | Out-Null; break } catch { Start-Sleep 1 } }
+          $h = @{ 'X-Syscom-Admin' = (Get-Content "$env:ProgramData\SYSCOM\admin.key" -Raw).Trim() }
+          function Wait-Result($since) {
+            foreach ($i in 1..120) {
+              try { $s = Invoke-RestMethod "$api/admin/status" -Headers $h; if ($s.lastUpdate -and [DateTimeOffset]$s.lastUpdate.time -gt $since) { return $s } } catch { }
+              Start-Sleep 1
+            }
+            Get-Content "$env:ProgramData\SYSCOM\updates\*\updater.log"
+            throw 'SYSCOM did not report back'
+          }
+
+          $since = [DateTimeOffset]::Now
+          Invoke-RestMethod "$api/admin/components/check" -Method Post -Headers $h | Out-Null
+          $outcome = Invoke-RestMethod "$api/admin/components/update" -Method Post -Headers $h -ContentType 'application/json' -Body '{"ids":["syscom"]}'
+          $outcome | ConvertTo-Json -Compress
+          if (-not $outcome.restarting) { throw 'expected a restart' }
+          try {
+            $again = Invoke-RestMethod "$api/admin/components/update" -Method Post -Headers $h -ContentType 'application/json' -Body '{"ids":["syscom"]}'
+            if (-not $again.message.Contains('already')) { throw "a second click started another update: $($again.message)" }
+          } catch [System.Net.Http.HttpRequestException] { Write-Host 'SYSCOM already stopped for the update' }
+          $status = Wait-Result $since
+          $log = Get-Content "$env:ProgramData\SYSCOM\updates\*\updater.log"
+          $log
+          $status.lastUpdate | ConvertTo-Json -Compress
+          if (-not $status.lastUpdate.success -or $status.version -ne '9.9.9') { throw "update failed: $($status.lastUpdate.message)" }
+          if (-not ($log -match 'Replaced in-use syscom-tray.dll')) { throw 'the held tray file was not swapped' }
+          if ((Get-Item "$inst\syscom-tray.dll").VersionInfo.ProductVersion -notlike '9.9.9*') { throw 'the tray app was not replaced' }
+
+          # The tray app exits; the next start of SYSCOM removes the old files.
+          $held | ForEach-Object Dispose
+          $since = [DateTimeOffset]::Now
+          $r = Invoke-RestMethod "$api/admin/restart" -Method Post -Headers $h
+          if (-not $r.restarting) { throw 'expected a restart' }
+          Wait-Result $since | Out-Null
+          Start-Sleep 2
+          if (Get-ChildItem $inst -Filter '*.syscom-old') { throw 'old files were not cleaned up' }
+          Stop-Process $feedServer -Force
+          Get-Process dotnet -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Host 'In-app update with the tray app running: OK'
+
+      - name: Check PowerShell scripts
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem install/*.ps1, build/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            foreach ($e in $errors) { Write-Host "$($f.Name):$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+          }
+          exit $bad
+
   smoke:
     # Starts the server with mock sensors on Linux and checks the public endpoints.
     runs-on: ubuntu-latest

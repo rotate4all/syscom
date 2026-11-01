@@ -8,6 +8,31 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.17.1] - 2026-11-01
+
+### Fixed
+- **Updating SYSCOM from the tray app failed and rolled back while the tray app was running.** The update also
+  replaces the tray app's own files, and Windows doesn't let a running program's files be overwritten. The updater
+  now renames those files aside and puts the new ones in their place; the old copies are deleted later. The tray app
+  then restarts itself into the new version (with its window open, if it was).
+- **The tray window kept showing the old version and "Installing updates…"**, so it looked like nothing happened.
+  The outcome of an update is now read as soon as the updater writes it, not only when SYSCOM starts.
+- **Update buttons could be clicked again while an update ran.** Check for updates, Update selected, Update all and
+  Restart server are disabled, with a progress bar, from the click until SYSCOM is back and the result shows
+  (in red when the update failed or was rolled back). A second request while SYSCOM restarts is refused.
+- **"The SYSCOM service is stopped. Start it now?" popped up during an update** (and again every few seconds when
+  answered No). It's not asked while an update restarts SYSCOM, and only once otherwise.
+- A failed or rolled-back version could be installed automatically again; it's now skipped until a newer one ships.
+- Updates that download a lot (the .NET runtime) no longer time out in the tray app after two minutes.
+
+### Added
+- **Start menu entries**: *SYSCOM* opens the tray app's window (and starts the tray app if it was closed), *SYSCOM
+  dashboard* opens the dashboard. Opening SYSCOM while it already runs brings its window up. Installs that update
+  in place get them the first time the new tray app starts.
+- The tray app has the SYSCOM icon in Explorer and the Start menu.
+- When SYSCOM itself is updated, the new version's updater installs it, so updater fixes apply to that same update.
+- Old update folders are pruned (the 5 newest are kept).
+
 ## [0.17.0] - 2026-11-01
 
 ### Added

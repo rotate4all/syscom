@@ -76,6 +76,10 @@ public sealed record UpdatePlan(
 /// <summary>Copy everything under <see cref="SourceDir"/> into <c>InstallDir/TargetSubdir</c>.</summary>
 public sealed record UpdateStep(string Component, string Version, string SourceDir, string TargetSubdir);
 
+/// <summary>Answer to an update or restart request. Restarting: the updater took over and SYSCOM restarts; the
+/// outcome then shows up as <see cref="ServerStatus.LastUpdate"/>.</summary>
+public sealed record UpdateOutcome(string Message, bool Restarting);
+
 public sealed record UpdateResult(
     DateTimeOffset Time,
     bool Success,
