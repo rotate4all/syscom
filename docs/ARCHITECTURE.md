@@ -130,11 +130,19 @@ in `%LocalAppData%\SYSCOM\tray.json`). Its window shows server info, the sign-in
 update choice, and the component table with Check / Update selected / Update all. **Set up phone…** shows the QR
 code for the phone setup page.
 
+One copy runs at a time (`Global\SYSCOM.Tray` mutex); starting it again (Start menu → SYSCOM, which passes
+`--open`) signals the running copy to show its window (`Global\SYSCOM.Tray.Show` event). While an update or restart
+runs, its buttons stay disabled until the updater's result arrives. When an update has replaced its files and the
+server is back on that version, it starts the new copy (`--restarted`, which waits for the old one to exit) and
+exits. It also creates the Start menu entries when they are missing and deletes its own `*.syscom-old` leftovers.
+
 ## Updater (`src/Syscom.Updater`)
 
 A small console app the server launches, from a copy in `%ProgramData%\SYSCOM\updates\<run>\updater`, so it can
-replace its own files. It stops the service, backs up and swaps files, starts the service, waits for
-`/api/health`, and rolls back on failure. It writes `last-result.json`, which the tray app shows.
+replace its own files (the new version's copy when SYSCOM itself is updated). It stops the service, backs up and
+swaps files, starts the service, waits for `/api/health`, and rolls back on failure. A file another program has open
+(the running tray app's) is renamed to `*.syscom-old` and replaced; the server deletes those leftovers when it
+starts. It writes `last-result.json`, which the server re-reads when it changes and the tray app shows.
 
 ## Install layout
 

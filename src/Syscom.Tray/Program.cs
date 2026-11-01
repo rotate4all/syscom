@@ -1,19 +1,69 @@
 using System.Diagnostics;
+using System.Reflection;
 using Syscom.Shared;
 
 namespace Syscom.Tray;
 
 internal static class Program
 {
+    private static Mutex? _single;
+
     [STAThread]
     private static void Main(string[] args)
     {
-        using var single = new Mutex(true, @"Global\SYSCOM.Tray", out var first);
-        if (!first) return; // already running in this session
+        // Opening SYSCOM again (Start menu, Program Files) while it runs brings up the running copy's window.
+        using var show = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+        _single = new Mutex(true, @"Global\SYSCOM.Tray", out var first);
+        if (!first && args.Contains("--restarted"))
+        {
+            // The previous version is on its way out after an update: wait for it.
+            try { first = _single.WaitOne(TimeSpan.FromSeconds(30)); }
+            catch (AbandonedMutexException) { first = true; }
+        }
+        if (!first)
+        {
+            show.Set();
+            return;
+        }
 
+        StartupVersion = VersionOnDisk() ?? RunningVersion;
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext(openWindow: args.Contains("--open")));
+        Application.Run(new TrayContext(openWindow: args.Contains("--open"), show));
+        ReleaseSingleInstance();
     }
+
+    public const string ShowEventName = @"Global\SYSCOM.Tray.Show";
+
+    private static void ReleaseSingleInstance()
+    {
+        var m = Interlocked.Exchange(ref _single, null);
+        if (m is null) return;
+        try { m.ReleaseMutex(); } catch (ApplicationException) { /* not owned */ }
+        m.Dispose();
+    }
+
+    /// <summary>This copy's version, like the server reports it ("0.17.1").</summary>
+    public static string RunningVersion { get; } = Normalize(
+        typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
+
+    /// <summary>The tray app's version in the install folder when this copy started.</summary>
+    public static string StartupVersion { get; private set; } = "";
+
+    /// <summary>The version of the tray app now in the install folder, which an update may have replaced.</summary>
+    public static string? VersionOnDisk()
+    {
+        try
+        {
+            var dll = Path.Combine(AppContext.BaseDirectory, "syscom-tray.dll");
+            return File.Exists(dll) ? Normalize(FileVersionInfo.GetVersionInfo(dll).ProductVersion) : null;
+        }
+        catch (Exception)
+        {
+            return null;   // being replaced right now
+        }
+    }
+
+    public static string Normalize(string? version) => (version ?? "").Split('+', '-')[0].Trim();
 }
 
 /// <summary>Tray icon whose colour reflects overall health; menu for the dashboard, management window and restart.</summary>
@@ -25,10 +75,16 @@ internal sealed class TrayContext : ApplicationContext
     private MainForm? _form;
     private string _notifiedUpdates = "";
     private Health _shown = (Health)(-1);
+    private bool _restartingTray;
+    private readonly RegisteredWaitHandle _showWait;
 
-    public TrayContext(bool openWindow)
+    public TrayContext(bool openWindow, EventWaitHandle show)
     {
         var menu = new ContextMenuStrip();
+        // Another start of the tray app (Start menu → SYSCOM) asks this one to show its window.
+        var ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        _showWait = ThreadPool.RegisterWaitForSingleObject(show, (_, _) => ui.Post(_ => ShowWindow(), null), null, Timeout.Infinite, executeOnlyOnce: false);
+
         menu.Items.Add("Open dashboard", null, (_, _) => OpenDashboard());
         menu.Items.Add("Set up phone…", null, async (_, _) => await Try(async () => { await PhoneSetupForm.ShowAsync(_client); return ""; }));
         menu.Items.Add("Manage SYSCOM…", null, (_, _) => ShowWindow());
@@ -42,7 +98,7 @@ internal sealed class TrayContext : ApplicationContext
             foreach (ToolStripMenuItem item in style.DropDownItems) item.Checked = (IconStyle)item.Tag! == TraySettings.Style;
         };
         menu.Items.Add(style);
-        menu.Items.Add("Restart server", null, async (_, _) => await Try(() => _client.RestartAsync()));
+        menu.Items.Add("Restart server", null, async (_, _) => await Try(async () => (await _client.RestartAsync()).Message));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit tray app", null, (_, _) => ExitThread());
 
@@ -57,6 +113,8 @@ internal sealed class TrayContext : ApplicationContext
         _timer.Start();
         _ = RefreshAsync();
         if (openWindow) ShowWindow();
+        _ = Shortcuts.CleanUpOldFiles();
+        Shortcuts.Ensure(_client.DashboardUrl);
     }
 
     private void OpenDashboard() => Process.Start(new ProcessStartInfo(_client.DashboardUrl) { UseShellExecute = true });
@@ -76,6 +134,14 @@ internal sealed class TrayContext : ApplicationContext
         try
         {
             var status = await _client.StatusAsync();
+            // An update replaced this app's files (this copy keeps running from the old ones, renamed aside). Once
+            // SYSCOM is back on the same version, start the new tray app in this one's place.
+            if (status is not null && Program.VersionOnDisk() is { Length: > 0 } onDisk && onDisk != Program.StartupVersion
+                && Program.Normalize(status.Version) == onDisk)
+            {
+                RestartIntoNewVersion();
+                return;
+            }
             var comps = await _client.ComponentsAsync();
             overall = comps.Select(c => c.Health).DefaultIfEmpty(Health.Ok).Max();
             var updates = comps.Where(c => c.UpdateAvailable && c.CanUpdate).Select(c => $"{c.Name} {c.Latest}").ToList();
@@ -100,6 +166,24 @@ internal sealed class TrayContext : ApplicationContext
             Redraw();
         }
         _icon.Text = tip.Length > 63 ? tip[..63] : tip;
+    }
+
+    private void RestartIntoNewVersion()
+    {
+        if (_restartingTray) return;
+        _restartingTray = true;
+        var args = _form is { IsDisposed: false, Visible: true } ? "--restarted --open" : "--restarted";
+        try
+        {
+            // The new copy waits until this one has exited (Main then releases the single-instance lock).
+            Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "syscom-tray.exe"), args) { UseShellExecute = true });
+            ExitThread();
+        }
+        catch (Exception ex)
+        {
+            // Keep running the old one; the next start of Windows starts the new one.
+            _icon.ShowBalloonTip(6000, "SYSCOM", $"Could not restart the tray app: {ex.Message}", ToolTipIcon.Warning);
+        }
     }
 
     private void Redraw()
@@ -129,6 +213,7 @@ internal sealed class TrayContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        _showWait.Unregister(null);
         TraySettings.Changed -= Redraw;
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnPreferenceChanged;
         _timer.Dispose();

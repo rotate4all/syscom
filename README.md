@@ -106,7 +106,8 @@ need **Local Network** access (Settings → Privacy & Security → Local Network
 
 The installer puts SYSCOM in `C:\Program Files\SYSCOM`, registers the **SYSCOM** Windows service, opens TCP 47810
 (HTTP), TCP 47812 (HTTPS) and UDP 47811 on private networks only, installs or updates the PawnIO driver if needed, and starts the tray app at
-logon. Remove it with `uninstall.ps1` in the same folder.
+logon. Start menu → **SYSCOM** opens the tray app's window (starting it again if you closed it), **SYSCOM
+dashboard** the dashboard. Remove it with `uninstall.ps1` in the same folder.
 
 **Requirements:** Windows 10/11 x64. Nothing else: the .NET runtime is bundled in the package.
 
@@ -171,8 +172,8 @@ PC relays to it on the LAN.
 
 ## Updating
 
-The **tray app** (notification area → SYSCOM icon → *Manage SYSCOM…*) lists every component with its installed
-version, the latest version and its health:
+The **tray app** (notification area → SYSCOM icon → *Manage SYSCOM…*, or Start menu → SYSCOM) lists every
+component with its installed version, the latest version and its health:
 
 | Component | Updated from |
 | --- | --- |
@@ -183,8 +184,10 @@ version, the latest version and its health:
 | .NET runtime | Microsoft's official release feed (patch updates) |
 
 **Update selected** or **Update all** downloads each piece, verifies its publisher's checksum, stops the service,
-swaps the files, restarts and checks health. If SYSCOM doesn't come back healthy, the previous files are restored
-automatically.
+swaps the files, restarts and checks health, with the buttons disabled until the result shows. If SYSCOM doesn't
+come back healthy, the previous files are restored automatically. The tray app restarts itself after an update of
+SYSCOM. (Coming from 0.17.0 or older, install 0.17.1 once with `install.ps1`; see
+[docs/UPDATES.md](docs/UPDATES.md#apply-and-roll-back).)
 
 By default each PC also installs new SYSCOM and dashboard releases **by itself**: it checks every 6 hours, and an
 update that restarts SYSCOM waits until no dashboard is open (at most a day). *Install updates automatically* in the

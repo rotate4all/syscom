@@ -343,7 +343,7 @@ mgmt.MapPost("/components/check", async (CancellationToken ct) =>
 });
 
 mgmt.MapPost("/components/update", async (UpdateRequest body, CancellationToken ct) =>
-    Results.Ok(new { message = await components.UpdateAsync(body.Ids ?? Array.Empty<string>(), ct) }));
+    Results.Ok(await components.UpdateAsync(body.Ids ?? Array.Empty<string>(), ct)));
 
 mgmt.MapGet("/settings", () => Results.Ok(new ServerSettings(cfg.AutoUpdate, cfg.UpdateCheckHours)));
 
@@ -367,11 +367,7 @@ mgmt.MapPost("/password", (PasswordRequest body) =>
     return Results.Ok(new { message = "Password changed. All browsers have been signed out." });
 });
 
-mgmt.MapPost("/restart", () =>
-{
-    components.Restart();
-    return Results.Ok(new { message = "Restarting." });
-});
+mgmt.MapPost("/restart", () => Results.Ok(components.Restart()));
 
 // Lets an HTTPS dashboard reach the other PCs through this one, so a phone only has to trust this PC's certificate.
 app.MapPeerRelay(discovery, deviceList);

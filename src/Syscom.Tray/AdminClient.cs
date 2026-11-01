@@ -13,7 +13,8 @@ public sealed class AdminClient : IDisposable
     public AdminClient()
     {
         Port = ReadPort();
-        _http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{Port}/api/"), Timeout = TimeSpan.FromSeconds(120) };
+        // Each call sets its own time limit: status calls are quick, an update downloads the new files first.
+        _http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{Port}/api/"), Timeout = Timeout.InfiniteTimeSpan };
     }
 
     public int Port { get; }
@@ -26,48 +27,67 @@ public sealed class AdminClient : IDisposable
         _http.DefaultRequestHeaders.Add(SyscomPaths.AdminHeader, File.ReadAllText(SyscomPaths.AdminKeyFile).Trim());
     }
 
-    public async Task<ServerStatus?> StatusAsync(CancellationToken ct = default)
+    private static readonly TimeSpan Quick = TimeSpan.FromSeconds(15);
+
+    public async Task<ServerStatus?> StatusAsync()
     {
         EnsureKey();
-        return await _http.GetFromJsonAsync<ServerStatus>("admin/status", SyscomPaths.Json, ct);
+        using var cts = new CancellationTokenSource(Quick);
+        return await _http.GetFromJsonAsync<ServerStatus>("admin/status", SyscomPaths.Json, cts.Token);
     }
 
-    public async Task<List<ComponentStatus>> ComponentsAsync(CancellationToken ct = default)
+    public async Task<List<ComponentStatus>> ComponentsAsync()
     {
         EnsureKey();
-        return await _http.GetFromJsonAsync<List<ComponentStatus>>("admin/components", SyscomPaths.Json, ct) ?? new();
+        using var cts = new CancellationTokenSource(Quick);
+        return await _http.GetFromJsonAsync<List<ComponentStatus>>("admin/components", SyscomPaths.Json, cts.Token) ?? new();
     }
 
-    public async Task<List<ComponentStatus>> CheckAsync(CancellationToken ct = default)
+    public async Task<List<ComponentStatus>> CheckAsync()
     {
         EnsureKey();
-        using var resp = await _http.PostAsync("admin/components/check", null, ct);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var resp = await _http.PostAsync("admin/components/check", null, cts.Token);
         resp.EnsureSuccessStatusCode();
-        return await resp.Content.ReadFromJsonAsync<List<ComponentStatus>>(SyscomPaths.Json, ct) ?? new();
+        return await resp.Content.ReadFromJsonAsync<List<ComponentStatus>>(SyscomPaths.Json, cts.Token) ?? new();
     }
 
-    public async Task<ServerSettings?> SettingsAsync(CancellationToken ct = default)
+    public async Task<ServerSettings?> SettingsAsync()
     {
         EnsureKey();
-        return await _http.GetFromJsonAsync<ServerSettings>("admin/settings", SyscomPaths.Json, ct);
+        using var cts = new CancellationTokenSource(Quick);
+        return await _http.GetFromJsonAsync<ServerSettings>("admin/settings", SyscomPaths.Json, cts.Token);
     }
 
-    public async Task<ServerSettings?> SaveSettingsAsync(ServerSettings settings, CancellationToken ct = default)
+    public async Task<ServerSettings?> SaveSettingsAsync(ServerSettings settings)
     {
         EnsureKey();
-        using var resp = await _http.PostAsJsonAsync("admin/settings", settings, SyscomPaths.Json, ct);
+        using var cts = new CancellationTokenSource(Quick);
+        using var resp = await _http.PostAsJsonAsync("admin/settings", settings, SyscomPaths.Json, cts.Token);
         resp.EnsureSuccessStatusCode();
-        return await resp.Content.ReadFromJsonAsync<ServerSettings>(SyscomPaths.Json, ct);
+        return await resp.Content.ReadFromJsonAsync<ServerSettings>(SyscomPaths.Json, cts.Token);
     }
 
-    public Task<string> UpdateAsync(IEnumerable<string> ids) => PostMessage("admin/components/update", new { ids = ids.ToArray() });
-    public Task<string> RestartAsync() => PostMessage("admin/restart", new { });
+    /// <summary>Downloads and installs updates (the .NET runtime alone is tens of MB, so this may take minutes).</summary>
+    public Task<UpdateOutcome> UpdateAsync(IEnumerable<string> ids) =>
+        PostOutcome("admin/components/update", new { ids = ids.ToArray() }, TimeSpan.FromMinutes(20));
+    public Task<UpdateOutcome> RestartAsync() => PostOutcome("admin/restart", new { }, Quick);
     public Task<string> SetPasswordAsync(string password) => PostMessage("admin/password", new { password });
+
+    private async Task<UpdateOutcome> PostOutcome(string path, object body, TimeSpan timeout)
+    {
+        EnsureKey();
+        using var cts = new CancellationTokenSource(timeout);
+        using var resp = await _http.PostAsJsonAsync(path, body, SyscomPaths.Json, cts.Token);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadFromJsonAsync<UpdateOutcome>(SyscomPaths.Json, cts.Token) ?? new UpdateOutcome("", false);
+    }
 
     private async Task<string> PostMessage(string path, object body)
     {
         EnsureKey();
-        using var resp = await _http.PostAsJsonAsync(path, body, SyscomPaths.Json);
+        using var cts = new CancellationTokenSource(Quick);
+        using var resp = await _http.PostAsJsonAsync(path, body, SyscomPaths.Json, cts.Token);
         var json = await resp.Content.ReadAsStringAsync();
         try
         {

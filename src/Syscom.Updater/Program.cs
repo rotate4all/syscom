@@ -1,6 +1,7 @@
 // syscom-updater: applies a staged update while the SYSCOM server is stopped.
 //   1. stop the server (Windows service or console process)
-//   2. back up every file it is about to overwrite, then copy the new files in
+//   2. back up every file it is about to overwrite, then copy the new files in (a file another program has open,
+//      such as the running tray app, is renamed aside first: Windows allows that, and the old copy goes later)
 //   3. start the server and wait for /api/health
 //   4. if it doesn't come back healthy: restore the backup and start the old version again
 using System.Diagnostics;
@@ -23,6 +24,7 @@ log.Write($"Plan: {(components.Count == 0 ? "restart only" : string.Join(", ", c
 Process? started = null;            // console-mode server we launched
 var backedUp = new List<string>();   // relative paths with a copy in BackupDir
 var created = new List<string>();    // relative paths that did not exist before
+var movedAside = new List<(string Rel, string Aside)>();   // in-use files renamed so the new one could take their place
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
 
 try
@@ -79,8 +81,9 @@ void StopServer()
         }
         catch (ArgumentException) { /* already gone */ }
     }
-    // Give Windows a moment to release file handles.
-    WaitUnlocked(plan.ServerExe, TimeSpan.FromSeconds(20));
+    // Give Windows a moment to release file handles (not for a shared `dotnet` host outside the install folder).
+    if (Path.GetFullPath(plan.ServerExe).StartsWith(Path.GetFullPath(plan.InstallDir), StringComparison.OrdinalIgnoreCase))
+        WaitUnlocked(plan.ServerExe, TimeSpan.FromSeconds(20));
     log.Write("Server stopped.");
 }
 
@@ -146,12 +149,19 @@ void ApplySteps()
                 created.Add(rel);
             }
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            if (!CopyWithRetry(src, dest))
-            {
-                // The runtime's dotnet.exe muxer may be in use by this very process; it is version-independent.
-                if (Path.GetFileName(dest).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase)) { log.Write($"Skipped busy {rel}"); continue; }
-                throw new IOException($"Could not replace {rel}");
-            }
+            if (CopyWithRetry(src, dest)) continue;
+
+            // The runtime's dotnet.exe muxer may be in use by this very process; it is version-independent.
+            if (Path.GetFileName(dest).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase)) { log.Write($"Skipped busy {rel}"); continue; }
+            // Open in another program (the tray app runs from this folder): Windows won't overwrite a running program's
+            // files but lets them be renamed. The program keeps running from the renamed file; the server deletes it
+            // on a later start, and the tray app restarts into the new version.
+            var aside = AsideName(dest);
+            try { File.Move(dest, aside); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new IOException($"Could not replace {rel}: {ex.Message}", ex); }
+            movedAside.Add((rel, aside));
+            if (!CopyWithRetry(src, dest)) throw new IOException($"Could not replace {rel}");
+            log.Write($"Replaced in-use {rel} (old copy kept as {Path.GetFileName(aside)})");
         }
         log.Write($"Applied {step.Component} {step.Version} into \\{step.TargetSubdir}");
     }
@@ -163,11 +173,36 @@ void Restore()
     {
         try { File.Delete(Path.Combine(plan.InstallDir, rel)); } catch (Exception ex) { log.Write($"Could not remove {rel}: {ex.Message}"); }
     }
-    foreach (var rel in backedUp)
+    // Files renamed aside go back under their own name (they are the originals, still in use).
+    var putBack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var (rel, aside) in movedAside)
     {
-        CopyWithRetry(Path.Combine(plan.BackupDir, rel), Path.Combine(plan.InstallDir, rel));
+        var dest = Path.Combine(plan.InstallDir, rel);
+        try
+        {
+            if (File.Exists(dest)) File.Delete(dest);
+            File.Move(aside, dest);
+            putBack.Add(rel);
+        }
+        catch (Exception ex) { log.Write($"Could not put back {rel}: {ex.Message}"); }
+    }
+    foreach (var rel in backedUp.Where(r => !putBack.Contains(r)))
+    {
+        if (!CopyWithRetry(Path.Combine(plan.BackupDir, rel), Path.Combine(plan.InstallDir, rel))) log.Write($"Could not restore {rel}");
     }
     log.Write($"Restored {backedUp.Count} file(s), removed {created.Count} new file(s).");
+}
+
+// "syscom-tray.exe" → "syscom-tray.exe.syscom-old" (or ".2.syscom-old", … when an older one is still in use too).
+static string AsideName(string path)
+{
+    for (var i = 1; ; i++)
+    {
+        var aside = i == 1 ? path + ".syscom-old" : $"{path}.{i}.syscom-old";
+        if (!File.Exists(aside)) return aside;
+        try { File.Delete(aside); return aside; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* still in use: next name */ }
+    }
 }
 
 void Finish(bool success, bool rolledBack, string message)
@@ -178,9 +213,9 @@ void Finish(bool success, bool rolledBack, string message)
     File.WriteAllText(plan.ResultPath, JsonSerializer.Serialize(result, SyscomPaths.Json));
 }
 
-static bool CopyWithRetry(string src, string dest)
+static bool CopyWithRetry(string src, string dest, int attempts = 6)
 {
-    for (var i = 0; i < 10; i++)
+    for (var i = 0; i < attempts; i++)
     {
         try { File.Copy(src, dest, true); return true; }
         catch (IOException) { Thread.Sleep(500); }

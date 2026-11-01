@@ -49,7 +49,31 @@ public sealed class ComponentManager : BackgroundService
         foreach (var c in _components) _state[c.Id] = new State();
     }
 
-    public UpdateResult? LastUpdate { get; private set; }
+    /// <summary>
+    /// The outcome of the last update or restart. The updater writes it after this server came up (or after rolling
+    /// back), so it is re-read whenever the file changes. A failed update is not installed automatically again.
+    /// </summary>
+    public UpdateResult? LastUpdate
+    {
+        get
+        {
+            lock (_lastLock)
+            {
+                DateTime stamp;
+                try { stamp = File.Exists(SyscomPaths.LastUpdateResult) ? File.GetLastWriteTimeUtc(SyscomPaths.LastUpdateResult) : DateTime.MinValue; }
+                catch (Exception) { return _lastUpdate; }
+                if (stamp == _lastStamp) return _lastUpdate;
+                _lastStamp = stamp;
+                _lastUpdate = ReadLastResult();
+                if (_lastUpdate is { Success: false } failed)
+                    foreach (var c in failed.Components) _autoSkip[c] = 0;   // "syscom 0.17.1"
+                return _lastUpdate;
+            }
+        }
+    }
+    private readonly object _lastLock = new();
+    private UpdateResult? _lastUpdate;
+    private DateTime _lastStamp = DateTime.MaxValue;
 
     public IReadOnlyList<ComponentStatus> Status() => _components.Select(c =>
     {
@@ -64,10 +88,8 @@ public sealed class ComponentManager : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        LastUpdate = ReadLastResult();
-        // An update that was rolled back is not installed automatically again (a newer release is).
-        if (LastUpdate is { RolledBack: true } failed)
-            foreach (var c in failed.Components) _autoSkip[c] = 0;
+        _ = LastUpdate;   // an update that failed is not installed automatically again (a newer release is)
+        CleanUp();
         foreach (var c in _components)
         {
             try { c.OnStartup(); } catch (Exception ex) { _log.LogWarning(ex, "Startup task for {Component} failed", c.Name); }
@@ -98,6 +120,7 @@ public sealed class ComponentManager : BackgroundService
 
     private async Task AutoInstallAsync(CancellationToken ct)
     {
+        _ = LastUpdate;
         var targets = AutoTargets();
         if (targets.Count == 0) { _autoPendingSince = null; return; }
         _autoPendingSince ??= DateTimeOffset.Now;
@@ -109,8 +132,8 @@ public sealed class ComponentManager : BackgroundService
 
         var versions = targets.ToDictionary(c => c.Id, c => _state[c.Id].Latest!.Version);
         _log.LogInformation("Installing updates automatically: {Updates}", string.Join(", ", versions.Select(v => $"{v.Key} {v.Value}")));
-        var message = await UpdateAsync(targets.Select(c => c.Id).ToList(), ct);
-        _log.LogInformation("Automatic update: {Message}", message);
+        var outcome = await UpdateAsync(targets.Select(c => c.Id).ToList(), ct);
+        _log.LogInformation("Automatic update: {Message}", outcome.Message);
         foreach (var (id, version) in versions)
             if (_state[id].Phase == "failed") _autoSkip[$"{id} {version}"] = 0;
         _autoPendingSince = null;
@@ -142,10 +165,14 @@ public sealed class ComponentManager : BackgroundService
         }));
     }
 
-    /// <summary>Updates the given components (all with an available update when <paramref name="ids"/> is empty).</summary>
-    public async Task<string> UpdateAsync(IReadOnlyCollection<string> ids, CancellationToken ct)
+    /// <summary>
+    /// Updates the given components (all with an available update when <paramref name="ids"/> is empty).
+    /// <c>Restarting</c> is true when the updater took over: SYSCOM restarts and records the outcome in LastUpdate.
+    /// </summary>
+    public async Task<UpdateOutcome> UpdateAsync(IReadOnlyCollection<string> ids, CancellationToken ct)
     {
-        if (!await _busy.WaitAsync(0, ct)) return "An update is already running.";
+        if (RestartPending) return new("SYSCOM is already restarting to install updates.", true);
+        if (!await _busy.WaitAsync(0, ct)) return new("An update is already running.", false);
         try
         {
             if (_state.Values.All(s => s.Latest is null)) await CheckAllAsync(ct);
@@ -155,7 +182,7 @@ public sealed class ComponentManager : BackgroundService
                     c.UpdateSupport().CanUpdate &&
                     _state[c.Id].Latest is { } l && VersionUtil.IsNewer(l.Version, SafeInstalled(c)))
                 .ToList();
-            if (targets.Count == 0) return "Everything is up to date.";
+            if (targets.Count == 0) return new("Everything is up to date.", false);
 
             var steps = new List<UpdateStep>();
             var restart = false;
@@ -184,13 +211,15 @@ public sealed class ComponentManager : BackgroundService
                 }
             }
 
+            var failed = targets.Where(c => _state[c.Id].Phase == "failed").Select(c => c.Name).ToList();
             if (steps.Count > 0 || restart)
             {
                 LaunchUpdater(runId, steps);
-                return "Installing updates; SYSCOM will restart in a moment.";
+                return new(failed.Count == 0
+                    ? "Installing updates; SYSCOM restarts in a moment."
+                    : $"Installing the other updates; SYSCOM restarts in a moment. Failed: {string.Join(", ", failed)}", true);
             }
-            var failed = targets.Where(c => _state[c.Id].Phase == "failed").Select(c => c.Name).ToList();
-            return failed.Count == 0 ? "Updated." : $"Failed: {string.Join(", ", failed)}";
+            return new(failed.Count == 0 ? "Updated." : $"Failed: {string.Join(", ", failed)}", false);
         }
         finally
         {
@@ -199,7 +228,16 @@ public sealed class ComponentManager : BackgroundService
     }
 
     /// <summary>Restarts the server through the updater (no files changed), e.g. after a driver install.</summary>
-    public void Restart() => LaunchUpdater(DateTime.Now.ToString("yyyyMMdd-HHmmss"), Array.Empty<UpdateStep>());
+    public UpdateOutcome Restart()
+    {
+        if (RestartPending) return new("SYSCOM is already restarting.", true);
+        LaunchUpdater(DateTime.Now.ToString("yyyyMMdd-HHmmss"), Array.Empty<UpdateStep>());
+        return new("Restarting.", true);
+    }
+
+    // Set once the updater is started: it stops this server shortly. Expires in case the updater never got going.
+    private DateTimeOffset _restartingSince = DateTimeOffset.MinValue;
+    private bool RestartPending => DateTimeOffset.Now - _restartingSince < TimeSpan.FromMinutes(3);
 
     private void LaunchUpdater(string runId, IReadOnlyList<UpdateStep> steps)
     {
@@ -207,11 +245,14 @@ public sealed class ComponentManager : BackgroundService
         var runDir = Path.Combine(SyscomPaths.UpdatesDir, runId);
         Directory.CreateDirectory(runDir);
 
-        // Run the updater from a copy so it can replace its own files in the install folder.
+        // Run the updater from a copy so it can replace its own files in the install folder. When SYSCOM itself is
+        // being updated, the new version's updater does the job (it knows how to install that version).
         var updaterDir = Path.Combine(runDir, "updater");
         Directory.CreateDirectory(updaterDir);
-        foreach (var f in Directory.GetFiles(appDir, "syscom-updater*"))
+        var updaterSource = steps.FirstOrDefault(s => s.Component == "syscom" && UpdaterRunsHere(s.SourceDir, appDir))?.SourceDir ?? appDir;
+        foreach (var f in Directory.GetFiles(updaterSource, "syscom-updater*"))
             File.Copy(f, Path.Combine(updaterDir, Path.GetFileName(f)), true);
+        _log.LogInformation("Using the updater from {Dir}", updaterSource);
 
         var asService = WindowsServiceHelpers.IsService();
         var exe = Environment.ProcessPath ?? Path.Combine(appDir, "syscom.exe");
@@ -239,10 +280,64 @@ public sealed class ComponentManager : BackgroundService
         psi.ArgumentList.Add("--plan");
         psi.ArgumentList.Add(planFile);
         Process.Start(psi);
+        _restartingSince = DateTimeOffset.Now;
         _log.LogInformation("Updater started with {Steps} step(s); plan {Plan}", steps.Count, planFile);
 
         // A console-mode server shuts itself down; a service is stopped by the updater through the SCM.
         if (!asService) _ = Task.Delay(1500).ContinueWith(_ => _lifetime.StopApplication());
+    }
+
+    /// <summary>
+    /// True when the updater in <paramref name="dir"/> can run on the .NET runtime bundled in <paramref name="appDir"/>
+    /// (a new SYSCOM may need a newer runtime than the one installed; then the installed updater does the job).
+    /// </summary>
+    private bool UpdaterRunsHere(string dir, string appDir)
+    {
+        try
+        {
+            if (!File.Exists(Path.Combine(dir, "syscom-updater.dll"))) return false;
+            var config = Path.Combine(dir, "syscom-updater.runtimeconfig.json");
+            using var doc = JsonDocument.Parse(File.ReadAllText(config));
+            var opts = doc.RootElement.GetProperty("runtimeOptions");
+            var needed = (opts.TryGetProperty("framework", out var fw) ? fw : opts.GetProperty("frameworks")[0]).GetProperty("version").GetString();
+            if (!Version.TryParse(needed, out var want)) return false;
+            var shared = Path.Combine(appDir, "runtime", "shared", "Microsoft.NETCore.App");
+            if (!Directory.Exists(shared)) return true; // no bundled runtime: the machine-wide one runs both
+            return Directory.GetDirectories(shared).Any(d =>
+                Version.TryParse(Path.GetFileName(d).Split('-')[0], out var have) && have.Major == want.Major && have >= want);
+        }
+        catch (Exception ex)
+        {
+            _log.LogInformation("Not using the new updater: {Error}", ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes what earlier updates left behind: program files renamed aside because they were in use (the tray app's,
+    /// typically) and all but the newest update folders.
+    /// </summary>
+    private void CleanUp()
+    {
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(AppContext.BaseDirectory, "*.syscom-old", SearchOption.AllDirectories))
+            {
+                try { File.Delete(f); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* still in use */ }
+            }
+            if (!Directory.Exists(SyscomPaths.UpdatesDir)) return;
+            var runs = Directory.GetDirectories(SyscomPaths.UpdatesDir)
+                .Where(d => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(d), @"^\d{8}-\d{6}$"))
+                .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal);
+            foreach (var dir in runs.Skip(5))
+            {
+                try { Directory.Delete(dir, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogInformation("Cleaning up after updates failed: {Error}", ex.Message);
+        }
     }
 
     private static UpdateResult? ReadLastResult()

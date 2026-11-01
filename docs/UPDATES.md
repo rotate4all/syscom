@@ -57,13 +57,25 @@ Nothing is installed without the publisher's checksum:
 1. The server downloads and verifies everything into `%ProgramData%\SYSCOM\updates\<timestamp>\<component>\`.
 2. In-process parts are applied right away (web dashboard, PawnIO setup).
 3. If files in the install folder must change (or a restart is needed), the server copies `syscom-updater` into that
-   run folder, writes `plan.json` and starts it.
+   run folder, writes `plan.json` and starts it. When SYSCOM itself is updated, that is the **new** version's updater
+   (unless it needs a newer .NET than the one installed).
 4. The updater stops the **SYSCOM** service, backs up every file it will overwrite into `backup\`, copies the
    new files, starts the service and polls `http://127.0.0.1:<port>/api/health` for up to 60 s. If the service
    stops on its own, it fails fast instead of waiting.
-5. **Not healthy?** It stops the service, restores the backup, deletes files that were new, and starts the old
-   version again.
-6. The outcome goes to `updates\last-result.json` and `updates\<timestamp>\updater.log`. The tray app shows it.
+   - Files another program has open can't be overwritten on Windows; the running tray app's are. Those are renamed
+     to `<name>.syscom-old` and the new file takes their place. The server deletes leftovers when it starts, the
+     tray app its own. The tray app notices its files changed and, once SYSCOM is back on that version, restarts
+     itself into it.
+5. **Not healthy?** It stops the service, restores the backup (renamed files go back under their own name),
+   deletes files that were new, and starts the old version again.
+6. The outcome goes to `updates\last-result.json` and `updates\<timestamp>\updater.log`. The server reads it as soon
+   as it changes; the tray app, which keeps its buttons disabled and a progress bar running from the click until
+   then, shows it. The 5 newest update folders are kept.
+
+**Updating from 0.17.0 or older:** those versions' updater can't swap the tray app's files, so their in-app update
+of SYSCOM rolls back while the tray app runs (the web dashboard updates fine). Install 0.17.1 once with the full
+package: download `SYSCOM-0.17.1-win-x64.zip`, extract it and run `install.ps1` as administrator. Password,
+settings and dashboards stay. Later versions update from the tray app or by themselves.
 
 Updating LibreHardwareMonitor in place works because the install has no `deps.json` pinning. If a new LHM version
 breaks API compatibility with the SYSCOM build, the health check fails and the update rolls back. A new SYSCOM
@@ -75,7 +87,7 @@ release built against that LHM version fixes it.
 
 ```json
 {
-  "syscom": "0.17.0",
+  "syscom": "0.17.1",
   "web": "0.17.0",
   "dotnet": { "channel": "10.0", "runtime": "latest" },
   "librehardwaremonitor": "0.9.6",

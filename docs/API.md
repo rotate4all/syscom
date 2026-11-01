@@ -94,11 +94,11 @@ or `No game running`; the catalog is re-sent when it changes.
 | GET | `/api/admin/status` | | `ServerStatus`: name, version, port, urls, clients, sensors, runningAsService, updateFeedUrl, lastUpdate, httpsPort, caFingerprint |
 | GET | `/api/admin/components` | | `ComponentStatus[]` |
 | POST | `/api/admin/components/check` | | checks every source, returns `ComponentStatus[]` |
-| POST | `/api/admin/components/update` | `{ ids: ["lhm", …] }` (empty = all available) | `{ message }` |
+| POST | `/api/admin/components/update` | `{ ids: ["lhm", …] }` (empty = all available) | `{ message, restarting }`. `restarting`: the updater took over and SYSCOM restarts; the outcome then shows as `lastUpdate` in the status. Refused (`restarting: true`) while a restart is pending. |
 | GET | `/api/admin/settings` | | `{ autoUpdate, updateCheckHours }` |
 | POST | `/api/admin/settings` | `{ autoUpdate: "syscom" \| "all" \| "off", updateCheckHours }` | the saved settings (see [UPDATES.md](UPDATES.md#automatic-updates)) |
 | POST | `/api/admin/password` | `{ password }` | `{ message }`, signs out every browser |
-| POST | `/api/admin/restart` | | `{ message }`, restarts via the updater (with health check) |
+| POST | `/api/admin/restart` | | `{ message, restarting }`, restarts via the updater (with health check) |
 
 `ComponentStatus` and the other contracts are defined in [`src/Shared/Contracts.cs`](../src/Shared/Contracts.cs).
 Component ids: `syscom`, `web`, `lhm`, `pawnio`, `dotnet`.

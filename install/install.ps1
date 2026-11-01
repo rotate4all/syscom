@@ -8,6 +8,7 @@
   - registers the "SYSCOM" Windows service (starts at boot, restarts on failure)
   - opens the dashboard ports (TCP, HTTP and HTTPS) and discovery port (UDP) for private networks
   - starts the tray app at every logon, with administrator rights, so it can manage updates
+  - adds Start menu entries: "SYSCOM" (the management window) and "SYSCOM dashboard"
 #>
 [CmdletBinding()]
 param(
@@ -49,6 +50,8 @@ Get-ChildItem $source | Where-Object { $_.Name -notin $exclude } | ForEach-Objec
     Copy-Item $_.FullName -Destination $InstallDir -Recurse -Force
 }
 Copy-Item (Join-Path $source 'uninstall.ps1') $InstallDir -Force
+# Old program files an in-app update had to rename aside because they were in use.
+Get-ChildItem $InstallDir -Filter '*.syscom-old' -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------- PawnIO
 if (-not $SkipPawnIO) {
@@ -107,6 +110,22 @@ if (-not $NoTray) {
     Register-ScheduledTask -TaskName 'SYSCOM Tray' -Action $action -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force | Out-Null
 }
 
+# ---------------------------------------------------------------- Start menu
+Step 'Start menu'
+$menu = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'SYSCOM'
+New-Item -ItemType Directory -Force -Path $menu | Out-Null
+$trayExe = Join-Path $InstallDir 'syscom-tray.exe'
+$shell = New-Object -ComObject WScript.Shell
+$link = $shell.CreateShortcut((Join-Path $menu 'SYSCOM.lnk'))
+$link.TargetPath = $trayExe
+$link.Arguments = '--open'
+$link.WorkingDirectory = $InstallDir
+$link.Description = 'Manage SYSCOM: health, updates and phone setup'
+$link.IconLocation = "$trayExe,0"
+$link.Save()
+Set-Content (Join-Path $menu 'SYSCOM dashboard.url') "[InternetShortcut]`r`nURL=http://localhost:$Port/`r`nIconFile=$trayExe`r`nIconIndex=0" -Encoding ascii
+Write-Host "    $menu"
+
 # ---------------------------------------------------------------- start
 Step 'Starting SYSCOM'
 Start-Service $service
@@ -129,4 +148,4 @@ Write-Host 'SYSCOM is installed.' -ForegroundColor Green
 foreach ($ip in $ips) { Write-Host "  Dashboard:  http://${ip}:$Port" }
 if ($ips) { Write-Host "  Phone app:  http://$($ips[0]):$Port/trust  (or tray icon > Set up phone)" }
 if (Test-Path $pwFile) { Write-Host "  Password:   $(Get-Content $pwFile)  (change it from the tray app)" }
-Write-Host '  Manage it from the SYSCOM icon in the notification area.'
+Write-Host '  Manage it from the SYSCOM icon in the notification area, or Start menu > SYSCOM.'

@@ -24,6 +24,7 @@ if (Get-Service SYSCOM -ErrorAction SilentlyContinue) {
     & sc.exe delete SYSCOM | Out-Null
 }
 Get-NetFirewallRule -DisplayName 'SYSCOM*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Remove-Item (Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'SYSCOM') -Recurse -Force -ErrorAction SilentlyContinue
 
 # This script may be running from inside the install folder; remove everything else, then schedule the rest.
 Get-ChildItem $InstallDir -Exclude 'uninstall.ps1' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
