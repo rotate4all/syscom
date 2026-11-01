@@ -1,4 +1,6 @@
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using Syscom.Shared;
 
@@ -53,6 +55,10 @@ public static class DataDirAccess
         {
             Directory.CreateDirectory(SyscomPaths.DataDir);
             var dir = SyscomPaths.DataDir.TrimEnd('\\');
+            // Locked down by an earlier start: what's inside was reset then, and SYSCOM's own files inherit. Resetting
+            // every file again (thousands, with the update backups) runs before the service reports to Windows, and
+            // while Windows starts that can take long enough for Windows to give up on the service.
+            if (IsLockedDown(dir)) return null;
             // The folder itself: no inherited permissions, full control for SYSTEM and Administrators, passed on to
             // everything inside. (Inheritance flags only apply to folders, so this is never run recursively.)
             var root = Icacls($"\"{dir}\" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /Q");
@@ -69,6 +75,24 @@ public static class DataDirAccess
         {
             return $"Could not restrict access to {SyscomPaths.DataDir}: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Whether the folder has exactly the permissions <see cref="Secure"/> gives it: none inherited, full control for
+    /// SYSTEM and Administrators, passed on to everything inside.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    internal static bool IsLockedDown(string dir)
+    {
+        var acl = new DirectoryInfo(dir).GetAccessControl(AccessControlSections.Access);
+        if (!acl.AreAccessRulesProtected) return false;
+        var rules = acl.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToList();
+        var owners = new[] { new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null) };
+        return rules.Count == owners.Length && owners.All(sid => rules.Any(r =>
+            r.IdentityReference.Equals(sid) && r.AccessControlType == AccessControlType.Allow &&
+            (r.FileSystemRights & FileSystemRights.FullControl) == FileSystemRights.FullControl &&
+            r.InheritanceFlags == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit) &&
+            r.PropagationFlags == PropagationFlags.None));
     }
 
     private static int Icacls(string args)

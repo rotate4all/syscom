@@ -18,10 +18,12 @@ as a GitHub release, and installed PCs update to it from there.
   taskbar on its next refresh (this also covers Explorer restarting).
 - **The SYSCOM service didn't start with Windows on some PCs**, and the tray app said SYSCOM is not running. The
   service read all the hardware, every drive's health data included, before telling Windows it had started. While
-  Windows starts, that can take longer than the 30 s Windows waits for a service, and then Windows gives up and
-  doesn't try again. SYSCOM now tells Windows at once and finds the hardware afterwards; the dashboard answers
-  meanwhile and gets the sensors as soon as they're found. The Windows event log (Application) says how long that
-  took: "Found … sensors in … s".
+  Windows starts (with backup software starting too, say), that can take longer than Windows waits for a service
+  (30 s, on some PCs 45 s), and then Windows gives up and doesn't try again: events 7009 and 7000 in the System log.
+  SYSCOM now tells Windows at once and finds the hardware afterwards; the dashboard answers meanwhile and gets the
+  sensors as soon as they're found. The Windows event log (Application) says how long that took: "Found … sensors
+  in … s". It also no longer resets the permissions of every file in its data folder at every start (thousands of
+  files with the update backups), only when the folder isn't locked down yet.
 - When the tray app starts (as you sign in) and the service is stopped, it starts it, unless the service was set to
   start manually or disabled. **Restart server** in the tray menu starts a stopped service too.
 - Windows now restarts SYSCOM also when it stops with an error, not only when it crashes, and SYSCOM reports a stop

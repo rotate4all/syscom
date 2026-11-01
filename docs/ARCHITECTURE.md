@@ -148,10 +148,11 @@ stopped when the tray app starts, the tray app starts it.
 
 ## Starting with Windows
 
-The service starts automatically, and Windows waits only 30 s for a service to report that it started (and doesn't
-retry if it doesn't). So `syscom.exe` reports to Windows before it touches the hardware: LibreHardwareMonitor finds
+The service starts automatically, and Windows waits only 30 s (by default) for a service to report that it started,
+and doesn't retry if it doesn't (events 7009 and 7000). So `syscom.exe` reports to Windows before it touches the hardware: LibreHardwareMonitor finds
 the devices (which can take long while Windows starts: every drive's health data is read) on the sensor loop's first
-read, while the web server already answers; browsers get the sensors when it's done. Its recovery settings restart
+read, while the web server already answers; browsers get the sensors when it's done. The data folder's permissions
+are only reset (every file, recursively) when the folder itself isn't locked down yet. Its recovery settings restart
 it 5, 10 and 30 s after a crash, or after it stopped because a part of it failed (it then reports an error exit
 code).
 
