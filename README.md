@@ -146,10 +146,20 @@ SYSCOM is built to stay out of the way of the games and work it monitors:
   app.
 
 <!-- benchmark:start -->
-Measured by CI on a GitHub Actions Windows runner for every change (the numbers are filled in from the latest run of
-`build\benchmark.ps1`; see the *installer* job's summary):
+Measured with `build\benchmark.ps1` by CI on a GitHub Actions Windows runner (AMD EPYC 7763, 4 vCPUs, 16 GB, no GPU,
+113 sensors), 60 s per row after a 30 s warm-up, SYSCOM 0.18.0:
 
-*Numbers pending the first run of the benchmark in CI.*
+| What's running | CPU, whole PC | CPU, one core | Memory (private) | Memory (working set) | Sent to the dashboard |
+| --- | --- | --- | --- | --- | --- |
+| SYSCOM, no dashboard open (history every 2 s) | 0.32 % | 1.3 % | 39 MB | 104 MB | none |
+| SYSCOM, a dashboard showing every sensor every 1 s | 0.23 % | 0.9 % | 39 MB | 105 MB | 0.4 KB/s |
+| SYSCOM, a dashboard showing every sensor every **500 ms** | 0.24 % | 1.0 % | 44 MB | 111 MB | 0.8 KB/s |
+| *For comparison:* LibreHardwareMonitor 0.9.6's own app (window open, its default 1 s) | 0.49 % | 2.0 % | 39 MB | 101 MB | |
+
+At 500 ms, SYSCOM uses about a quarter of a percent of the PC's CPU: half of what LibreHardwareMonitor's own app uses
+at 1 s, reading the same sensors through the same library, and about the same memory. Private memory is what SYSCOM
+itself holds; the working set also counts the .NET runtime's shared code. Differences of about 0.1 % are run-to-run
+noise. A gaming PC with a GPU and motherboard sensors has several times more sensors to read, so measure yours too.
 <!-- benchmark:end -->
 
 Measure it on your own PC with [build/benchmark.ps1](build/benchmark.ps1) (run as administrator; it changes
