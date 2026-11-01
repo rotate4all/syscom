@@ -262,12 +262,55 @@ function svgEl(tag, attrs = {}) {
   return e;
 }
 
-function readout(cls = 'readout') {
-  const r = el('div', cls + ' num');
-  const n = el('span');
+// ---- smooth motion: numbers count to each new reading (one shared animation loop for every card)
+const tweens = new Set();
+let tweenFrame = 0;
+const easeOut = (t) => 1 - (1 - t) ** 3;
+function tween(ms, step) {
+  const tw = { t0: performance.now(), ms, step, cancel() { tweens.delete(tw); } };
+  tweens.add(tw);
+  if (!tweenFrame) tweenFrame = requestAnimationFrame(runTweens);
+  return tw;
+}
+function runTweens(now) {
+  tweenFrame = 0;
+  for (const tw of tweens) {
+    const t = Math.min(1, Math.max(0, (now - tw.t0) / tw.ms));
+    tw.step(easeOut(t));
+    if (t >= 1) tweens.delete(tw);
+  }
+  if (tweens.size) tweenFrame = requestAnimationFrame(runTweens);
+}
+
+/** Motion settings a card follows: { on, ms } (ms = how long a change takes; follows the polling interval). */
+export const STILL = Object.freeze({ on: false, ms: 0 });
+
+/**
+ * A number with its unit. `unitPos` places the unit right or left of the number, centered above or below it, or
+ * hides it. show(v, fmt) counts from the last number to the new one when motion is on.
+ */
+function readout(cls = 'readout', unitPos = 'right', motion = STILL) {
+  const r = el('div', `${cls} num u-${unitPos}`);
+  const n = el('span', 'n');
   const u = el('span', 'unit');
   r.append(n, u);
-  return { root: r, set(f) { n.textContent = f.n; u.textContent = f.u; } };
+  const put = (f) => { setText(n, f.n); setText(u, f.u); };
+  let shown = null;
+  let anim = null;
+  return {
+    root: r,
+    set: put,
+    show(v, fmt) {
+      anim?.cancel();
+      anim = null;
+      const from = shown;
+      shown = v;
+      if (motion.on && from != null && v != null && from !== v && Number.isFinite(from) && Number.isFinite(v)) {
+        anim = tween(motion.ms, (t) => put(fmt(from + (v - from) * t)));
+      } else put(fmt(v));
+    },
+    stop() { anim?.cancel(); },
+  };
 }
 
 // ---- card sizes: a grid of columns (4 on a phone, more on wider screens) and fixed-height rows
@@ -280,6 +323,13 @@ const WIDE = { gauge: [4, 3], bar: [4, 2], vbar: [2, 3], graph: [4, 3], value: [
 /** Default card size [columns, rows] for a display type ("lg" = the old "Wide" size). */
 export function defaultSize(type, legacy) {
   return [...((legacy === 'lg' ? WIDE : SIZES)[type] || SIZES.value)];
+}
+
+/** A 0–100 setting (opacity, rounding), or null when not set. */
+export function pct(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : null;
 }
 
 /** A widget's thickness setting as a factor (1 = proportional to the card, the default). */
@@ -370,7 +420,8 @@ function arcD(c, r, a0, a1) {
  * that is rebuilt (after an edit, or switching between the desktop and phone layouts) keeps its graph; without it
  * the card keeps its own. The card's size (grid span) is set by the dashboard; everything inside scales with the card.
  */
-export function createWidget(w, sensor, tools, lookup = () => undefined, series = null) {
+export function createWidget(w, sensor, tools, lookup = () => undefined, series = null, env = {}) {
+  const motion = env.motion || STILL;
   const shared = !!series;
   const seriesOf = series || (() => []);
   const highest = (a) => a.reduce((m, v) => (v != null && v > m ? v : m), 0);
@@ -388,6 +439,14 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
   const icon = el('span', 'card-icon', deviceIcon(sensor));
   const bodyWrap = el('div', 'card-body');
   card.append(head, icon, bodyWrap);
+  // This card's own background opacity and corner rounding, when it doesn't follow the dashboard's.
+  const alpha = pct(w.alpha);
+  const round = pct(w.round);
+  if (alpha != null) { card.style.setProperty('--a', alpha / 100); card.classList.toggle('see-through', alpha < 100); }
+  if (round != null) { card.style.setProperty('--rf', round / 100); card.style.setProperty('--cap', round >= 50 ? 'round' : 'butt'); }
+  // Number size (all display types) and where the unit goes.
+  bodyWrap.style.setProperty('--ns', numberScale(w.numSize));
+  const upos = unitPosOf(w);
 
   const unit = displayUnit(w, sensor);
   const k = unitFactor(sensor?.unit, unit);
@@ -426,6 +485,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     el: card,
     update(v, visible, max, xs) {
       if (!shared) impl.push?.(v);
+      impl.tick?.();
       if (v != null) v *= k;
       if (max != null) liveMax = max * k;
       last = v;
@@ -445,6 +505,9 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     },
     destroy() { impl.destroy?.(); extraRo?.disconnect(); },
   };
+
+  /** The main reading, counted smoothly to each new value when motion is on. */
+  function showMain(r, v) { r.show(v, (x) => format(x, unit, w.decimals)); }
 
   function paint() {
     const c = colorFor(w, last);
@@ -574,7 +637,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     box.style.setProperty('--y', `${g.y[pos] ?? g.y.center}%`);
     const svg = svgEl('svg', { viewBox: `0 0 ${g.vb[0]} ${g.vb[1]}` });
     box.append(svg);
-    const r = readout();
+    const r = readout('readout', upos, motion);
     box.append(r.root);
     body.append(box);
 
@@ -673,14 +736,15 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
       body,
       paint(v) {
         draw(v, v == null ? 0 : frac(v));
-        r.set(format(v, unit, w.decimals));
+        showMain(r, v);
       },
+      destroy() { r.stop(); },
     };
   }
 
   // ---- bars: shared track, fill, threshold ticks and min/max labels
   function barParts(vertical) {
-    const r = readout();
+    const r = readout('readout', upos, motion);
     const track = el('div', 'bar-track');
     const fill = el('div', 'bar-fill');
     track.append(fill);
@@ -706,57 +770,69 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
           const a = format(scaleMin, unit, 0); const b = format(max, unit, 0);
           lo.textContent = a.n; hi.textContent = `${b.n} ${b.u}`;
         }
-        const pct = `${v == null ? 0 : frac(v) * 100}%`;
-        if (vertical) fill.style.height = pct; else fill.style.width = pct;
-        r.set(format(v, unit, w.decimals));
+        const at = `${v == null ? 0 : frac(v) * 100}%`;
+        if (vertical) fill.style.height = at; else fill.style.width = at;
+        showMain(r, v);
       },
+      destroy() { r.stop(); },
     };
   }
 
+  // Bars can hide the min/max numbers of their scale; a vertical bar then sits centered, at the same width.
   function hbar() {
-    const body = el('div', `barw pos-${pos}`);
+    const body = el('div', `barw pos-${pos}${w.hideScale ? ' no-scale' : ''}`);
     body.style.setProperty('--tk', tk);
     const p = barParts(false);
     if (pos === 'inside') p.track.append(p.r.root);
     else body.append(p.r.root);
     body.append(p.track, p.scale);
-    return { body, paint: p.paint };
+    return { body, paint: p.paint, destroy: p.destroy };
   }
 
   function vbar() {
-    const body = el('div', `vbarw pos-${pos}`);
+    const body = el('div', `vbarw pos-${pos}${w.hideScale ? ' no-scale' : ''}`);
     body.style.setProperty('--tk', tk);
     const p = barParts(true);
     if (pos === 'inside') p.track.append(p.r.root);
     else body.append(p.r.root);
     body.append(p.track, p.scale);
-    return { body, paint: p.paint };
+    return { body, paint: p.paint, destroy: p.destroy };
   }
 
-  // ---- graph: rolling line chart on canvas
+  // ---- graph: rolling line chart on canvas. With motion on, the line glides left between readings instead of
+  // jumping a step: the canvas is one step wider than the card and slides by that step over one polling interval
+  // (a CSS transform, so it costs nothing while it moves).
   function graph() {
     const body = el('div', `graph pos-${pos}`);
-    const r = readout();
+    const r = readout('readout', upos, motion);
+    const plot = el('div', 'plot');
     const canvas = el('canvas');
-    body.append(r.root, canvas);
+    plot.append(canvas);
+    body.append(r.root, plot);
     const ctx = canvas.getContext('2d');
     const hist = seriesOf(w.sensor);   // raw readings; drawn in the card's unit
-    let dirtySize = true;
-    const ro = new ResizeObserver(() => { dirtySize = true; draw(); });
-    ro.observe(canvas);
+    let size = '';
+    let fresh = false;   // a reading arrived since the last drawing
+    const ro = new ResizeObserver(() => { size = ''; draw(); });
+    ro.observe(plot);
     let color = null;
 
     function draw() {
       const dpr = window.devicePixelRatio || 1;
-      const wpx = canvas.clientWidth, hpx = canvas.clientHeight;
+      const wpx = plot.clientWidth, hpx = plot.clientHeight;
       if (!wpx || !hpx) return;
-      if (dirtySize) {
-        canvas.width = Math.round(wpx * dpr);
+      const step = wpx / (HISTORY - 1);
+      const glide = motion.on;
+      const cw = glide ? wpx + step : wpx;
+      const key = `${cw}x${hpx}@${dpr}`;
+      if (size !== key) {
+        canvas.width = Math.round(cw * dpr);
         canvas.height = Math.round(hpx * dpr);
-        dirtySize = false;
+        canvas.style.width = `${cw}px`;
+        size = key;
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, wpx, hpx);
+      ctx.clearRect(0, 0, cw, hpx);
       const styles = getComputedStyle(card);
       const stroke = color || styles.getPropertyValue('--accent').trim() || '#38bdf8';
       const max = scaleMax();
@@ -764,7 +840,6 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
       const lw = Math.min(12, Math.max(1.5, Math.min(4, hpx / 45)) * tk);
       const pad = Math.max(2, lw / 2);
       const y = (v) => hpx - pad - frac(v) * (hpx - 2 * pad);
-      const step = wpx / (HISTORY - 1);
 
       // threshold guide lines
       ctx.lineWidth = 1;
@@ -774,13 +849,25 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
         if (tv <= scaleMin || tv >= max) continue;
         ctx.strokeStyle = t.color;
         ctx.globalAlpha = 0.6;
-        ctx.beginPath(); ctx.moveTo(0, y(tv)); ctx.lineTo(wpx, y(tv)); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, y(tv)); ctx.lineTo(cw, y(tv)); ctx.stroke();
       }
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
 
+      if (glide && fresh) {
+        // Start one step to the right and slide in the newest reading over one interval.
+        canvas.style.transition = 'none';
+        canvas.style.transform = 'translateX(0)';
+        void canvas.offsetWidth;
+        canvas.style.transition = `transform ${motion.ms}ms linear`;
+        canvas.style.transform = `translateX(${-step}px)`;
+      } else if (!glide && canvas.style.transform) {
+        canvas.style.transition = canvas.style.transform = '';
+      }
+      fresh = false;
+
       if (hist.length < 2) return;
-      const x0 = wpx - (hist.length - 1) * step;
+      const x0 = cw - (hist.length - 1) * step;
       ctx.beginPath();
       let started = false;
       hist.forEach((v, i) => {
@@ -793,7 +880,7 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
       ctx.lineJoin = 'round';
       ctx.stroke();
       // soft fill under the line
-      ctx.lineTo(wpx, hpx); ctx.lineTo(x0, hpx); ctx.closePath();
+      ctx.lineTo(cw, hpx); ctx.lineTo(x0, hpx); ctx.closePath();
       ctx.globalAlpha = 0.12;
       ctx.fillStyle = stroke;
       ctx.fill();
@@ -803,18 +890,18 @@ export function createWidget(w, sensor, tools, lookup = () => undefined, series 
     return {
       body,
       push(v) { hist.push(v); if (hist.length > HISTORY) hist.shift(); },
-      paint(v, c) { color = c; r.set(format(v, unit, w.decimals)); draw(); },
-      destroy() { ro.disconnect(); },
+      tick() { fresh = true; },
+      paint(v, c) { color = c; showMain(r, v); draw(); },
+      destroy() { ro.disconnect(); r.stop(); },
     };
   }
 
   // ---- value: big number
   function value() {
-    const body = el('div', `valuew pos-${pos} u-${unitPosOf(w)}`);
-    body.style.setProperty('--ns', numberScale(w.numSize));
-    const r = readout();
+    const body = el('div', `valuew pos-${pos}`);
+    const r = readout('readout', upos, motion);
     body.append(r.root);
-    return { body, paint(v) { r.set(format(v, unit, w.decimals)); } };
+    return { body, paint(v) { showMain(r, v); }, destroy() { r.stop(); } };
   }
 }
 

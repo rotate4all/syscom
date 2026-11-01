@@ -20,8 +20,18 @@ internal sealed class MainForm : Form
     private readonly Button _check = new() { Text = "Check for updates", AutoSize = true };
     private readonly Button _updateSelected = new() { Text = "Update selected", AutoSize = true };
     private readonly Button _updateAll = new() { Text = "Update all", AutoSize = true };
+    private readonly ComboBox _autoUpdate = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 300 };
+    private readonly ComboBox _trayStyle = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 190 };
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 3000 };
     private bool _busy;
+    private bool _settingsLoaded;
+
+    private static readonly (string Value, string Label)[] AutoUpdateChoices =
+    {
+        ("syscom", "SYSCOM and its dashboard (recommended)"),
+        ("all", "Every component"),
+        ("off", "Off: only tell me"),
+    };
 
     public MainForm(AdminClient client)
     {
@@ -68,6 +78,29 @@ internal sealed class MainForm : Form
 
         var componentsLabel = new Label { Text = "Components", AutoSize = true, Font = new Font("Segoe UI Semibold", 10.5f), Dock = DockStyle.Top, Padding = new Padding(0, 12, 0, 6) };
 
+        // Settings: what installs by itself, and how the tray icon looks.
+        var settings = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 10, 0, 0) };
+        foreach (var (_, label) in AutoUpdateChoices) _autoUpdate.Items.Add(label);
+        foreach (var (_, label) in TraySettings.Styles) _trayStyle.Items.Add(label);
+        _trayStyle.SelectedIndex = Array.FindIndex(TraySettings.Styles, s => s.Style == TraySettings.Style);
+        _trayStyle.SelectedIndexChanged += (_, _) => TraySettings.Style = TraySettings.Styles[_trayStyle.SelectedIndex].Style;
+        _autoUpdate.Enabled = false;
+        _autoUpdate.SelectedIndexChanged += async (_, _) =>
+        {
+            if (!_settingsLoaded || _autoUpdate.SelectedIndex < 0) return;
+            try
+            {
+                var now = await _client.SettingsAsync();
+                await _client.SaveSettingsAsync(new ServerSettings(AutoUpdateChoices[_autoUpdate.SelectedIndex].Value, now?.UpdateCheckHours ?? 6));
+                _status.Text = "Saved.";
+            }
+            catch (Exception ex) { _status.Text = ex.Message; }
+        };
+        Label Caption(string text) => new() { Text = text, AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
+        settings.Controls.AddRange(new Control[] { Caption("Install updates automatically:"), _autoUpdate, Caption("   Tray icon:"), _trayStyle });
+        TraySettings.Changed += SyncTrayStyle;
+        Disposed += (_, _) => TraySettings.Changed -= SyncTrayStyle;
+
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 0) };
         footer.Controls.AddRange(new Control[] { _check, _updateSelected, _updateAll, _status });
         _status.Padding = new Padding(8, 7, 0, 0);
@@ -84,6 +117,7 @@ internal sealed class MainForm : Form
         Controls.Add(_list);
         Controls.Add(componentsLabel);
         Controls.Add(header);
+        Controls.Add(settings);
         Controls.Add(footer);
 
         _timer.Tick += async (_, _) => await RefreshAsync();
@@ -94,6 +128,12 @@ internal sealed class MainForm : Form
             if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); _timer.Stop(); }
         };
         VisibleChanged += (_, _) => { if (Visible) _timer.Start(); };
+    }
+
+    private void SyncTrayStyle()
+    {
+        var i = Array.FindIndex(TraySettings.Styles, s => s.Style == TraySettings.Style);
+        if (_trayStyle.SelectedIndex != i) _trayStyle.SelectedIndex = i;
     }
 
     public async Task CheckForUpdatesAsync()
@@ -146,6 +186,12 @@ internal sealed class MainForm : Form
                 : $"Sign-in password (generated): {initial}  ·  please change it";
             _password.ForeColor = initial is null ? SystemColors.GrayText : Color.FromArgb(180, 83, 9);
             Fill(await _client.ComponentsAsync());
+            if (!_settingsLoaded && await _client.SettingsAsync() is { } st)
+            {
+                _autoUpdate.SelectedIndex = Math.Max(0, Array.FindIndex(AutoUpdateChoices, c => c.Value == st.AutoUpdate));
+                _autoUpdate.Enabled = true;
+                _settingsLoaded = true;
+            }
         }
         catch (Exception)
         {

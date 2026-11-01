@@ -61,6 +61,17 @@ jobs:
           sleep 3
           curl -sf 'localhost:47810/api/history?sensor=/mock/cpu/load/0&days=1' -H "authorization: Bearer $TOKEN" | jq -e '.step == 60 and (.avg | length) == 1440 and (.avg[-1] != null or .avg[-2] != null)'
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/admin/components)" = "403"
+          # Sign-ins renew; the device list and background are kept on the PC; the relay refuses unknown PCs and admin paths
+          curl -sf -X POST localhost:47810/api/token -H "authorization: Bearer $TOKEN" | jq -e '(.token | length) > 20 and .expiresInDays == 30'
+          curl -sf -X PUT localhost:47810/api/devices -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+            -d '{"devices":[{"id":"0123456789abcdef","name":"Other PC","url":"http://192.168.1.20:47810","httpsPort":47812}]}' | jq -e '.rev == 1'
+          curl -sf localhost:47810/api/devices -H "authorization: Bearer $TOKEN" | jq -e '.devices[0].name == "Other PC"'
+          curl -sf -X PUT localhost:47810/api/dashboard/background -H "authorization: Bearer $TOKEN" -H 'content-type: image/png' \
+            --data-binary @web/icons/icon-192.png | jq -e '(.id | length) == 16'
+          test "$(curl -s -o /dev/null -w '%{content_type}' localhost:47810/api/dashboard/background -H "authorization: Bearer $TOKEN")" = "image/png"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/relay/unknown/api/info)" = "404"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/relay/0123456789abcdef/api/admin/status)" = "404"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/relay/127.0.0.1-47810/api/info)" = "404"
           curl -sf localhost:47810/trust | grep -q "Install SYSCOM as an app"
           # HTTPS with the server's own CA (name-constrained to local names and private addresses)
           curl -sf localhost:47810/tls/syscom-ca.crt -o "$RUNNER_TEMP/ca.der"

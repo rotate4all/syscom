@@ -46,6 +46,20 @@ public sealed class AdminClient : IDisposable
         return await resp.Content.ReadFromJsonAsync<List<ComponentStatus>>(SyscomPaths.Json, ct) ?? new();
     }
 
+    public async Task<ServerSettings?> SettingsAsync(CancellationToken ct = default)
+    {
+        EnsureKey();
+        return await _http.GetFromJsonAsync<ServerSettings>("admin/settings", SyscomPaths.Json, ct);
+    }
+
+    public async Task<ServerSettings?> SaveSettingsAsync(ServerSettings settings, CancellationToken ct = default)
+    {
+        EnsureKey();
+        using var resp = await _http.PostAsJsonAsync("admin/settings", settings, SyscomPaths.Json, ct);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadFromJsonAsync<ServerSettings>(SyscomPaths.Json, ct);
+    }
+
     public Task<string> UpdateAsync(IEnumerable<string> ids) => PostMessage("admin/components/update", new { ids = ids.ToArray() });
     public Task<string> RestartAsync() => PostMessage("admin/restart", new { });
     public Task<string> SetPasswordAsync(string password) => PostMessage("admin/password", new { password });

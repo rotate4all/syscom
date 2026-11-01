@@ -5,6 +5,7 @@ using Syscom.Server.Config;
 using Syscom.Server.Dashboards;
 using Syscom.Server.Discovery;
 using Syscom.Server.History;
+using Syscom.Server.Relay;
 using Syscom.Server.Sensors;
 using Syscom.Server.Streaming;
 using Syscom.Server.Tls;
@@ -128,6 +129,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SensorHub>());
 var dataDir = Path.GetDirectoryName(Path.GetFullPath(cfg.FilePath))!;
 builder.Services.AddSingleton(sp => new HistoryStore(dataDir, sp.GetRequiredService<ILoggerFactory>().CreateLogger("History")));
 builder.Services.AddSingleton(sp => new DashboardStore(dataDir, sp.GetRequiredService<ILogger<DashboardStore>>()));
+builder.Services.AddSingleton(sp => new DeviceListStore(dataDir, sp.GetRequiredService<ILogger<DeviceListStore>>()));
+builder.Services.AddSingleton(new BackgroundStore(dataDir));
 builder.Services.AddSingleton<LanDiscovery>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LanDiscovery>());
 
@@ -153,6 +156,8 @@ var components = app.Services.GetRequiredService<ComponentManager>();
 var admin = app.Services.GetRequiredService<AdminAccess>();
 var history = app.Services.GetRequiredService<HistoryStore>();
 var dashboards = app.Services.GetRequiredService<DashboardStore>();
+var deviceList = app.Services.GetRequiredService<DeviceListStore>();
+var backgrounds = app.Services.GetRequiredService<BackgroundStore>();
 if (cfg.HistoryEnabled) hub.Polled += history.Add;
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
@@ -193,6 +198,11 @@ api.MapPost("/login", (HttpContext ctx, LoginRequest body) =>
     return Results.Unauthorized();
 });
 
+// A signed-in browser swaps its token for a fresh one now and then, so a session lasts TokenLifetimeDays after it
+// was last used rather than after the password was typed.
+api.MapPost("/token", (HttpContext ctx) =>
+    Authorized(ctx) ? Results.Ok(new { token = auth.Renew(), expiresInDays = cfg.TokenLifetimeDays }) : Results.Unauthorized());
+
 api.MapGet("/sensors", (HttpContext ctx) =>
     Authorized(ctx) ? Results.Ok(hub.Catalog) : Results.Unauthorized());
 
@@ -231,6 +241,57 @@ api.MapPut("/dashboard", async (HttpContext ctx) =>
     }
 });
 
+// The dashboard's background picture (see BackgroundStore); its id is in the dashboard's "look".
+api.MapGet("/dashboard/background", (HttpContext ctx) =>
+{
+    if (!Authorized(ctx)) return Results.Unauthorized();
+    if (backgrounds.Get() is not { } bg) return Results.NotFound();
+    var etag = $"\"{bg.Id}\"";
+    if (ctx.Request.Headers.IfNoneMatch == etag) return Results.StatusCode(StatusCodes.Status304NotModified);
+    ctx.Response.Headers.ETag = etag;
+    ctx.Response.Headers.CacheControl = "private, no-cache";
+    ctx.Response.Headers.XContentTypeOptions = "nosniff";
+    return Results.File(bg.File, bg.Type);
+});
+api.MapPut("/dashboard/background", async (HttpContext ctx) =>
+{
+    if (!Authorized(ctx)) return Results.Unauthorized();
+    if (!BackgroundStore.Accepts(ctx.Request.ContentType)) return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
+    if (ctx.Request.ContentLength > BackgroundStore.MaxBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    using var ms = new MemoryStream();
+    var buffer = new byte[81920];
+    int read;
+    while ((read = await ctx.Request.Body.ReadAsync(buffer, ctx.RequestAborted)) > 0)
+    {
+        if (ms.Length + read > BackgroundStore.MaxBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+        ms.Write(buffer, 0, read);
+    }
+    try { return Results.Ok(new { id = backgrounds.Save(ms.ToArray(), ctx.Request.ContentType!) }); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { message = ex.Message }); }
+});
+api.MapDelete("/dashboard/background", (HttpContext ctx) =>
+{
+    if (!Authorized(ctx)) return Results.Unauthorized();
+    backgrounds.Delete();
+    return Results.Ok(new { });
+});
+
+// The PCs a dashboard opened from this PC shows (see DeviceListStore).
+api.MapGet("/devices", (HttpContext ctx) => Authorized(ctx) ? Results.Ok(deviceList.Get()) : Results.Unauthorized());
+api.MapPut("/devices", async (HttpContext ctx) =>
+{
+    if (!Authorized(ctx)) return Results.Unauthorized();
+    if (ctx.Request.ContentLength > 64 * 1024) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    System.Text.Json.JsonDocument doc;
+    try { doc = await System.Text.Json.JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted); }
+    catch (System.Text.Json.JsonException) { return Results.BadRequest(new { message = "Not JSON." }); }
+    using (doc)
+    {
+        var (rev, error) = deviceList.Save(doc.RootElement);
+        return rev is null ? Results.BadRequest(new { message = error }) : Results.Ok(new { rev });
+    }
+});
+
 api.MapGet("/peers", (HttpContext ctx) =>
     Authorized(ctx)
         ? Results.Ok(discovery.Peers.Select(p => new { p.Id, p.Name, p.Url, p.HttpsUrl }))
@@ -252,7 +313,7 @@ app.Map("/ws", async (HttpContext ctx) =>
         await ws.CloseAsync((System.Net.WebSockets.WebSocketCloseStatus)MetricsSession.CloseUnauthorized, "unauthorized", ctx.RequestAborted);
         return;
     }
-    await new MetricsSession(ws, hub, dashboards).RunAsync(ctx.RequestAborted);
+    await new MetricsSession(ws, hub, dashboards, deviceList).RunAsync(ctx.RequestAborted);
 });
 
 // ---- certificate for phones (public: it's a CA certificate, no secrets)
@@ -284,6 +345,18 @@ mgmt.MapPost("/components/check", async (CancellationToken ct) =>
 mgmt.MapPost("/components/update", async (UpdateRequest body, CancellationToken ct) =>
     Results.Ok(new { message = await components.UpdateAsync(body.Ids ?? Array.Empty<string>(), ct) }));
 
+mgmt.MapGet("/settings", () => Results.Ok(new ServerSettings(cfg.AutoUpdate, cfg.UpdateCheckHours)));
+
+mgmt.MapPost("/settings", (ServerSettings body) =>
+{
+    if (body.AutoUpdate is not ("syscom" or "all" or "off"))
+        return Results.BadRequest(new { message = "AutoUpdate must be syscom, all or off." });
+    cfg.AutoUpdate = body.AutoUpdate;
+    if (body.UpdateCheckHours is > 0) cfg.UpdateCheckHours = Math.Clamp(body.UpdateCheckHours, 1, 168);
+    cfg.Save();
+    return Results.Ok(new ServerSettings(cfg.AutoUpdate, cfg.UpdateCheckHours));
+});
+
 mgmt.MapPost("/password", (PasswordRequest body) =>
 {
     if (string.IsNullOrWhiteSpace(body.Password) || body.Password.Length < 6)
@@ -299,6 +372,9 @@ mgmt.MapPost("/restart", () =>
     components.Restart();
     return Results.Ok(new { message = "Restarting." });
 });
+
+// Lets an HTTPS dashboard reach the other PCs through this one, so a phone only has to trust this PC's certificate.
+app.MapPeerRelay(discovery, deviceList);
 
 app.MapWebClient();
 

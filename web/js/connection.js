@@ -2,6 +2,14 @@
 import { effectiveMaxFrom } from './widgets.js';
 
 const CLOSE_UNAUTHORIZED = 4401;
+const DAY = 86_400_000;
+
+/** A PC's /api/info at a base address (direct, or through a relay). */
+export async function probe(base, timeoutMs = 6000) {
+  const r = await fetch(base + '/api/info', { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+  if (!r.ok) throw new Error(r.status === 404 || r.status === 502 ? "That PC doesn't answer." : 'Not a SYSCOM server');
+  return r.json();
+}
 
 export class Connection extends EventTarget {
   constructor(device) {
@@ -16,22 +24,43 @@ export class Connection extends EventTarget {
     this.timer = 0;
     this.watchAll = false;     // true while the widget editor is open: stream every sensor for its live list
     this.last = null;          // the latest data frame
+    this.home = false;         // the PC that served this page
+    this.route = null;         // 'direct' | 'relay' | null (not decided yet)
   }
 
-  /** A dashboard opened over HTTPS must reach every PC over HTTPS too (browsers block mixed content). */
-  get base() {
+  /**
+   * A dashboard opened over HTTPS must reach every PC over HTTPS too (browsers block mixed content). Each PC has its
+   * own certificate; when this browser doesn't trust another PC's, it goes through the PC that served the page,
+   * which relays to the others on the LAN (/relay/{id}), so trusting that one PC is enough.
+   */
+  get direct() {
     const url = new URL(this.device.url);
-    if (location.protocol === 'https:' && this.device.httpsPort) return `https://${url.hostname}:${this.device.httpsPort}`;
+    if (location.protocol === 'https:' && !this.home) return this.device.httpsPort ? `https://${url.hostname}:${this.device.httpsPort}` : null;
+    if (location.protocol === 'https:' && this.home) return location.origin;
     return url.origin;
   }
 
+  get relay() {
+    const url = new URL(this.device.url);
+    return `${location.origin}/relay/${this.device.serverId || `${url.hostname}-${url.port || 47810}`}`;
+  }
+
+  get base() { return this.route === 'relay' ? this.relay : this.direct || this.relay; }
+
   get secure() { return this.base.startsWith('https:'); }
 
-  async info() {
-    const r = await fetch(this.base + '/api/info', { cache: 'no-store' });
-    if (!r.ok) throw new Error('Not a SYSCOM server');
-    return r.json();
+  /** Picks direct or relayed access (only matters for a dashboard opened over HTTPS). */
+  async resolveRoute() {
+    if (this.route) return this.route;
+    if (location.protocol !== 'https:' || this.home || !this.relayAvailable) return (this.route = 'direct');
+    if (this.direct) {
+      try { await probe(this.direct, 4000); return (this.route = 'direct'); } catch { /* untrusted certificate or unreachable */ }
+    }
+    try { await probe(this.relay, 6000); return (this.route = 'relay'); } catch { /* not reachable either way */ }
+    return null;
   }
+
+  info() { return probe(this.base); }
 
   async login(password) {
     const r = await fetch(this.base + '/api/login', {
@@ -43,8 +72,18 @@ export class Connection extends EventTarget {
     if (!r.ok) throw new Error('Wrong password.');
     const { token } = await r.json();
     this.device.token = token;
+    this.device.tokenAt = Date.now();
     this.emit('token');
     this.connect();
+  }
+
+  /** Swaps the token for a fresh one once a day, so a browser in use stays signed in (30 days after its last use). */
+  async renewToken() {
+    if (!this.device.token || Date.now() - (this.device.tokenAt || 0) < DAY) return;
+    try {
+      const { token } = await this.api('/api/token', { method: 'POST' });
+      if (token) { this.device.token = token; this.device.tokenAt = Date.now(); this.emit('token'); }
+    } catch { /* offline: try again on the next connection */ }
   }
 
   logout() {
@@ -73,22 +112,47 @@ export class Connection extends EventTarget {
     return r.json();
   }
 
-  /** This PC's dashboards: { rev, widgets (desktop), phone (null = same as desktop) } (rev 0 = none saved yet). */
+  /** This PC's dashboard: { rev, widgets (desktop), phone (null = same as desktop), look, saved, current } (rev 0 = none saved yet). */
   loadDashboard() { return this.api('/api/dashboard'); }
 
-  /** Saves both layouts on the PC; resolves to the new revision. */
-  async saveDashboard(layouts) {
-    const body = JSON.stringify({ widgets: layouts.desktop, phone: layouts.phone });
+  /** Saves the dashboard on the PC (both layouts, look, saved layouts); resolves to the new revision. */
+  async saveDashboard(dev) {
+    const body = JSON.stringify({ widgets: dev.layouts.desktop, phone: dev.layouts.phone, look: dev.look, saved: dev.saved, current: dev.current });
     return (await this.api('/api/dashboard', { method: 'PUT', body })).rev;
+  }
+
+  /** The dashboard's background picture as a Blob, or null. */
+  async loadBackground() {
+    const r = await fetch(this.base + '/api/dashboard/background', { headers: { authorization: 'Bearer ' + this.device.token } });
+    return r.ok ? r.blob() : null;
+  }
+
+  /** Stores a picture as the background; resolves to its id. */
+  async saveBackground(blob) {
+    const r = await fetch(this.base + '/api/dashboard/background', {
+      method: 'PUT', body: blob, headers: { authorization: 'Bearer ' + this.device.token, 'content-type': blob.type },
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => null))?.message || `HTTP ${r.status}`);
+    return (await r.json()).id;
+  }
+
+  /** The device list kept on this PC (see app.js): { rev, devices: [{ id, name, url, httpsPort }] }. */
+  loadDevices() { return this.api('/api/devices'); }
+
+  async saveDevices(devices) {
+    return (await this.api('/api/devices', { method: 'PUT', body: JSON.stringify({ devices }) })).rev;
   }
 
   /** One sensor's history: { step, start, avg[], min[], max[], enabled }. */
   history(sensor, days) { return this.api(`/api/history?sensor=${encodeURIComponent(sensor)}&days=${days}`); }
 
-  connect() {
+  async connect() {
     this.stop();
     if (!this.device.token) { this.setStatus('auth'); return; }
     this.setStatus('connecting');
+    const attempt = ++this.attempt;
+    await this.resolveRoute();
+    if (attempt !== this.attempt) return;   // stopped or restarted meanwhile
 
     const url = this.base.replace(/^http/, 'ws') + '/ws?token=' + encodeURIComponent(this.device.token);
     const ws = new WebSocket(url);
@@ -98,6 +162,7 @@ export class Connection extends EventTarget {
       this.retry = 0;
       this.setStatus('online');
       this.subscribe();
+      this.renewToken();
     };
     ws.onmessage = (e) => this.onMessage(e.data);
     ws.onclose = (e) => {
@@ -110,12 +175,14 @@ export class Connection extends EventTarget {
         return;
       }
       this.setStatus('offline');
+      this.route = null;   // decide again next time (a certificate may have been trusted, or the relay gone)
       const delay = Math.min(30000, 1000 * 2 ** this.retry++);
       this.timer = setTimeout(() => this.connect(), delay);
     };
   }
 
   stop() {
+    this.attempt = (this.attempt || 0) + 1;
     clearTimeout(this.timer);
     const ws = this.ws;
     this.ws = null;
@@ -156,17 +223,20 @@ export class Connection extends EventTarget {
         this.index = new Map(m.sensors.map((id, i) => [id, i]));
         break;
       case 'data':
-        this.last = { t: m.t, v: m.v };
+        this.last = { t: m.t, v: m.v, index: this.index };   // the order of the values in this frame
         this.emit('data', this.last);
         break;
       case 'layout':
         this.emit('layout', { rev: m.rev });
         break;
+      case 'devices':
+        this.emit('devices', { rev: m.rev });
+        break;
     }
   }
 
   value(frame, sensorId) {
-    const i = this.index.get(sensorId);
+    const i = (frame.index || this.index).get(sensorId);
     return i === undefined ? null : frame.v[i];
   }
 

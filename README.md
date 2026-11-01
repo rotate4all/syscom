@@ -40,6 +40,12 @@ component by component.
   rename titles and subtitles, and start from a suggested layout. Every browser and phone that signs
   in sees the same layouts. Each PC has a desktop layout and a separate phone layout (its own cards, sensors and
   sections), and the phone preview lets you prepare the phone one from your PC.
+- **Saved layouts, export and import.** Save layouts under a name and switch between them with one click; export a
+  layout to a file and import it on any PC, where its readings are matched to that PC's sensors. Undo and redo the
+  last 5 edits.
+- **Make it yours:** a colour or picture behind the dashboard, see-through cards, square or rounded corners, smooth
+  animations (gauges glide, numbers count, graphs scroll steadily), the unit beside, above or below any reading, bars
+  with or without their min/max labels, and a full-screen mode without the top bar.
 - **30 days of history for every sensor.** Tap any card for a chart of the last 1, 3, 7, 14 or 30 days, with the
   lowest, average and highest readings.
 - **Min / med / max thresholds** per widget, each with its own colour (for example green, amber, red, or reversed for
@@ -53,8 +59,10 @@ component by component.
   installs the dashboard as an app over HTTPS. No cloud account, no public domain.
 - **Password sign-in** per PC, with signed tokens and lockout after repeated failures.
 - **Monitoring only.** No fan control, no overclocking, nothing that writes to your hardware.
-- **A tray app** that shows the health of every component, checks for updates and installs them with one click,
-  with automatic rollback if an update misbehaves.
+- **Updates itself.** Each PC installs new SYSCOM releases from this repository on its own (or every component, or
+  none: your choice), with automatic rollback if an update misbehaves.
+- **A tray app** that shows the health of every component, checks for updates and installs them with one click. Its
+  icon comes in colour, or transparent like modern tray icons.
 
 ## What it monitors
 
@@ -127,8 +135,15 @@ yours if it's older. The tray app warns you if PawnIO is ever missing or older t
   highest threshold the reading has reached. Leave a value empty to turn it off.
 - **More PCs:** Settings → *Add device*. PCs found on your network are listed, or you can type an address. Swipe
   left or right (or use the arrow keys) to switch.
-- **Polling:** Settings → per device, *Every … ms* (minimum 500).
-- **Backup:** Settings → *Export layout* saves your dashboards to a file you can import later or elsewhere.
+- **Polling:** Settings → per device, *Every …* (0.5 s to 10 s; 1 s by default).
+- **Undo / redo:** in edit mode, the arrows next to the pencil (or Ctrl+Z, Ctrl+Y) undo and redo the last 5 edits.
+- **Layouts:** the layers button saves the layout on screen under a name, switches between saved layouts, and
+  exports or imports one layout (desktop or phone) of the PC on screen. An import works on any PC: each reading is
+  matched to that PC's sensors, and the result lists any it couldn't find.
+- **Appearance:** Settings → *Appearance…* (or in edit mode) sets the PC's background (colour or picture), card
+  transparency, corner rounding and animations. Each card can override transparency and corners in its editor.
+- **Full screen:** the corners button (or F) hides the top bar; tap the screen and use the button in the corner, or
+  press Esc, to leave.
 
 ### Install it as a phone app
 
@@ -149,9 +164,10 @@ page. The secure dashboard then talks to every PC over HTTPS.
 Without the certificate, *Add to Home Screen* still works over plain HTTP: iPhone opens it full screen, Android
 creates a shortcut that opens in Chrome.
 
-Each PC keeps its own dashboard, so a layout you prepare on your PC is what the phone shows. The list of PCs and the
-theme are kept per browser and per address (HTTP and HTTPS count as different addresses): open the dashboard from the
-same PC address each time, and add the other PCs from there.
+Each PC keeps its own dashboard, so a layout you prepare on your PC is what the phone shows. The list of PCs is kept
+on the PC the dashboard was opened from, so every address of that PC (and every browser) finds the same PCs. From
+the secure dashboard, adding another PC needs no second certificate: if the phone doesn't trust that PC, the first
+PC relays to it on the LAN.
 
 ## Updating
 
@@ -168,7 +184,13 @@ version, the latest version and its health:
 
 **Update selected** or **Update all** downloads each piece, verifies its publisher's checksum, stops the service,
 swaps the files, restarts and checks health. If SYSCOM doesn't come back healthy, the previous files are restored
-automatically. Details are in [docs/UPDATES.md](docs/UPDATES.md).
+automatically.
+
+By default each PC also installs new SYSCOM and dashboard releases **by itself**: it checks every 6 hours, and an
+update that restarts SYSCOM waits until no dashboard is open (at most a day). *Install updates automatically* in the
+tray app's window switches between SYSCOM and its dashboard, every component, or notifications only. Every merge
+that bumps the version publishes a release here, which is what the PCs pick up. Details are in
+[docs/UPDATES.md](docs/UPDATES.md).
 
 ## Building from source
 

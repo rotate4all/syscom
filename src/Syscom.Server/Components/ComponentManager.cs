@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Syscom.Server.Config;
+using Syscom.Server.Sensors;
 using Syscom.Shared;
 
 namespace Syscom.Server.Components;
@@ -10,6 +11,8 @@ namespace Syscom.Server.Components;
 /// Tracks health and versions of every component, checks their official sources for updates, and applies updates:
 /// in-process when possible (web client, PawnIO), otherwise by handing a plan to syscom-updater, which stops the
 /// server, swaps files, restarts it and rolls back if it doesn't come back healthy.
+/// Checks run every UpdateCheckHours; depending on AutoUpdate, updates found are then installed by themselves
+/// (SYSCOM and its web dashboard by default), preferably while no dashboard is open.
 /// </summary>
 public sealed class ComponentManager : BackgroundService
 {
@@ -17,9 +20,14 @@ public sealed class ComponentManager : BackgroundService
     private readonly ServerConfig _cfg;
     private readonly ILogger<ComponentManager> _log;
     private readonly IHostApplicationLifetime _lifetime;
+    private readonly SensorHub _hub;
     private readonly HttpClient _http;
     private readonly ConcurrentDictionary<string, State> _state = new();
     private readonly SemaphoreSlim _busy = new(1, 1);
+    // "component version" pairs an automatic update must not try again (it failed or was rolled back).
+    private readonly ConcurrentDictionary<string, byte> _autoSkip = new();
+    private DateTimeOffset? _autoPendingSince;
+    private DateTimeOffset _lastCheck = DateTimeOffset.MinValue;
 
     private sealed class State
     {
@@ -29,12 +37,13 @@ public sealed class ComponentManager : BackgroundService
         public DateTimeOffset? Checked;
     }
 
-    public ComponentManager(IEnumerable<Component> components, ServerConfig cfg, ILogger<ComponentManager> log, IHostApplicationLifetime lifetime)
+    public ComponentManager(IEnumerable<Component> components, ServerConfig cfg, ILogger<ComponentManager> log, IHostApplicationLifetime lifetime, SensorHub hub)
     {
         _components = components.ToList();
         _cfg = cfg;
         _log = log;
         _lifetime = lifetime;
+        _hub = hub;
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd($"SYSCOM/{typeof(Program).Assembly.GetName().Version?.ToString(3)}");
         foreach (var c in _components) _state[c.Id] = new State();
@@ -56,23 +65,60 @@ public sealed class ComponentManager : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         LastUpdate = ReadLastResult();
+        // An update that was rolled back is not installed automatically again (a newer release is).
+        if (LastUpdate is { RolledBack: true } failed)
+            foreach (var c in failed.Components) _autoSkip[c] = 0;
         foreach (var c in _components)
         {
             try { c.OnStartup(); } catch (Exception ex) { _log.LogWarning(ex, "Startup task for {Component} failed", c.Name); }
         }
         if (!_cfg.AutoCheckUpdates) return;
 
-        // First check shortly after start, then daily. Checking never installs anything.
+        // First check shortly after start, then every UpdateCheckHours. Every few minutes in between, updates found
+        // earlier are installed when the AutoUpdate setting allows it.
         try { await Task.Delay(TimeSpan.FromSeconds(30), ct); } catch (OperationCanceledException) { return; }
-        using var timer = new PeriodicTimer(TimeSpan.FromHours(24));
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(5));
         do
         {
-            await CheckAllAsync(ct);
+            if (DateTimeOffset.Now - _lastCheck >= TimeSpan.FromHours(_cfg.UpdateCheckHours)) await CheckAllAsync(ct);
+            try { await AutoInstallAsync(ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "Automatic update failed"); }
         } while (await SafeTick(timer, ct));
+    }
+
+    /// <summary>Components the AutoUpdate setting lets a check install by itself, with an update waiting.</summary>
+    private List<Component> AutoTargets() => _cfg.AutoUpdate == "off"
+        ? new()
+        : _components.Where(c =>
+                (_cfg.AutoUpdate == "all" || c.Id is "syscom" or "web") &&
+                c.UpdateSupport().CanUpdate &&
+                _state[c.Id].Latest is { } l && VersionUtil.IsNewer(l.Version, SafeInstalled(c)) &&
+                !_autoSkip.ContainsKey($"{c.Id} {l.Version}"))
+            .ToList();
+
+    private async Task AutoInstallAsync(CancellationToken ct)
+    {
+        var targets = AutoTargets();
+        if (targets.Count == 0) { _autoPendingSince = null; return; }
+        _autoPendingSince ??= DateTimeOffset.Now;
+        // Most updates restart SYSCOM, which blanks open dashboards for a few seconds: wait for a moment nobody is
+        // watching, but not more than a day (a dashboard on a wall display may never close). The web dashboard alone
+        // updates in place, without a restart, so it doesn't wait.
+        var restarts = targets.Any(c => c.Id != "web");
+        if (restarts && _hub.Clients > 0 && DateTimeOffset.Now - _autoPendingSince < TimeSpan.FromHours(24)) return;
+
+        var versions = targets.ToDictionary(c => c.Id, c => _state[c.Id].Latest!.Version);
+        _log.LogInformation("Installing updates automatically: {Updates}", string.Join(", ", versions.Select(v => $"{v.Key} {v.Value}")));
+        var message = await UpdateAsync(targets.Select(c => c.Id).ToList(), ct);
+        _log.LogInformation("Automatic update: {Message}", message);
+        foreach (var (id, version) in versions)
+            if (_state[id].Phase == "failed") _autoSkip[$"{id} {version}"] = 0;
+        _autoPendingSince = null;
     }
 
     public async Task CheckAllAsync(CancellationToken ct)
     {
+        _lastCheck = DateTimeOffset.Now;
         await Task.WhenAll(_components.Select(async c =>
         {
             var s = _state[c.Id];

@@ -91,6 +91,10 @@ public sealed class AuthService
                && DateTimeOffset.UtcNow.ToUnixTimeSeconds() < exp;
     }
 
+    /// <summary>A fresh token for a browser that is already signed in, so a session lasts as long as it's used
+    /// (TokenLifetimeDays after the last renewal) instead of expiring mid-use.</summary>
+    public string Renew() => IssueToken();
+
     private bool VerifyPassword(string password)
     {
         if (_cfg.PasswordHash is null || _cfg.PasswordSalt is null) return false;
