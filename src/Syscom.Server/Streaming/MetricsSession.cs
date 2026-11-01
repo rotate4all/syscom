@@ -13,6 +13,7 @@ namespace Syscom.Server.Streaming;
 ///   server → {"type":"subscribed","interval":1000,"sensors":["id",...]}
 ///   server → {"type":"data","t":unixMs,"v":[number|null,...]}            (same order as "subscribed")
 ///   server → {"type":"layout","rev":n}       the PC's dashboard changed (sent on connect too); GET /api/dashboard
+///   server → {"type":"devices","rev":n}      the PC's device list changed (sent on connect too); GET /api/devices
 /// </summary>
 public sealed class MetricsSession
 {
@@ -21,6 +22,7 @@ public sealed class MetricsSession
     private readonly WebSocket _ws;
     private readonly SensorHub _hub;
     private readonly DashboardStore _dashboards;
+    private readonly DeviceListStore _devices;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private volatile string[]? _subscription; // null = everything
@@ -28,12 +30,14 @@ public sealed class MetricsSession
     private volatile bool _hasSubscribed;
     private int _sentCatalogVersion = -1;
     private int _sentLayoutRev = -1;
+    private int _sentDevicesRev = -1;
 
-    public MetricsSession(WebSocket ws, SensorHub hub, DashboardStore dashboards)
+    public MetricsSession(WebSocket ws, SensorHub hub, DashboardStore dashboards, DeviceListStore devices)
     {
         _ws = ws;
         _hub = hub;
         _dashboards = dashboards;
+        _devices = devices;
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -118,6 +122,7 @@ public sealed class MetricsSession
             {
                 await SendCatalogIfChanged(ct);
                 await SendLayoutIfChanged(ct);
+                await SendDevicesIfChanged(ct);
                 if (!_hasSubscribed) continue;
 
                 // Clear the flag before reading the subscription so a concurrent change is announced next tick.
@@ -170,6 +175,14 @@ public sealed class MetricsSession
         if (rev == _sentLayoutRev) return;
         _sentLayoutRev = rev;
         await SendJson(w => { w.WriteString("type", "layout"); w.WriteNumber("rev", rev); }, ct);
+    }
+
+    private async Task SendDevicesIfChanged(CancellationToken ct)
+    {
+        var rev = _devices.Rev;
+        if (rev == _sentDevicesRev) return;
+        _sentDevicesRev = rev;
+        await SendJson(w => { w.WriteString("type", "devices"); w.WriteNumber("rev", rev); }, ct);
     }
 
     private async Task SendCatalogIfChanged(CancellationToken ct)

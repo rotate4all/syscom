@@ -55,6 +55,12 @@ public sealed record ServerStatus(
     int? HttpsPort,
     string? CaFingerprint);
 
+/// <summary>
+/// Server settings the tray app changes. AutoUpdate: "syscom" (SYSCOM and its web dashboard install by themselves),
+/// "all" (every component does) or "off" (updates are only reported).
+/// </summary>
+public sealed record ServerSettings(string AutoUpdate, int UpdateCheckHours);
+
 /// <summary>Instructions for syscom-updater: replace files in the install folder, restart, verify, roll back on failure.</summary>
 public sealed record UpdatePlan(
     string InstallDir,

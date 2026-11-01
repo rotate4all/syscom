@@ -34,11 +34,22 @@ internal sealed class TrayContext : ApplicationContext
         menu.Items.Add("Manage SYSCOM…", null, (_, _) => ShowWindow());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Check for updates", null, async (_, _) => { ShowWindow(); await _form!.CheckForUpdatesAsync(); });
+        var style = new ToolStripMenuItem("Tray icon");
+        foreach (var (value, label) in TraySettings.Styles)
+            style.DropDownItems.Add(new ToolStripMenuItem(label, null, (_, _) => TraySettings.Style = value) { Tag = value });
+        style.DropDownOpening += (_, _) =>
+        {
+            foreach (ToolStripMenuItem item in style.DropDownItems) item.Checked = (IconStyle)item.Tag! == TraySettings.Style;
+        };
+        menu.Items.Add(style);
         menu.Items.Add("Restart server", null, async (_, _) => await Try(() => _client.RestartAsync()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit tray app", null, (_, _) => ExitThread());
 
-        _icon = new NotifyIcon { Text = "SYSCOM", ContextMenuStrip = menu, Visible = true, Icon = Icons.Status(Health.Unknown) };
+        _icon = new NotifyIcon { Text = "SYSCOM", ContextMenuStrip = menu, Visible = true, Icon = Icons.Tray(Health.Unknown, TraySettings.Style) };
+        // Redraw when the style changes, or when Windows switches the taskbar between light and dark.
+        TraySettings.Changed += Redraw;
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnPreferenceChanged;
         _icon.DoubleClick += (_, _) => ShowWindow();
         _icon.BalloonTipClicked += (_, _) => ShowWindow();
 
@@ -86,11 +97,21 @@ internal sealed class TrayContext : ApplicationContext
         if (overall != _shown)
         {
             _shown = overall;
-            var old = _icon.Icon;
-            _icon.Icon = Icons.Status(overall);
-            old?.Dispose();
+            Redraw();
         }
         _icon.Text = tip.Length > 63 ? tip[..63] : tip;
+    }
+
+    private void Redraw()
+    {
+        var old = _icon.Icon;
+        _icon.Icon = Icons.Tray(_shown < 0 ? Health.Unknown : _shown, TraySettings.Style);
+        old?.Dispose();
+    }
+
+    private void OnPreferenceChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is Microsoft.Win32.UserPreferenceCategory.General or Microsoft.Win32.UserPreferenceCategory.VisualStyle) Redraw();
     }
 
     private async Task Try(Func<Task<string>> action)
@@ -108,48 +129,12 @@ internal sealed class TrayContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        TraySettings.Changed -= Redraw;
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnPreferenceChanged;
         _timer.Dispose();
         _icon.Visible = false;
         _icon.Dispose();
         _client.Dispose();
         base.ExitThreadCore();
     }
-}
-
-/// <summary>Draws the tray/window icon at runtime (no binary assets): a gauge arc tinted by health.</summary>
-internal static class Icons
-{
-    public static Color ColorFor(Health h) => h switch
-    {
-        Health.Ok => Color.FromArgb(34, 197, 94),
-        Health.Warning => Color.FromArgb(245, 158, 11),
-        Health.Error => Color.FromArgb(239, 68, 68),
-        _ => Color.FromArgb(56, 189, 248),
-    };
-
-    public static Icon Status(Health h)
-    {
-        using var bmp = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-            using var bg = new SolidBrush(Color.FromArgb(14, 17, 22));
-            g.FillEllipse(bg, 0, 0, 31, 31);
-            using var track = new Pen(Color.FromArgb(60, 70, 85), 4);
-            g.DrawArc(track, 6, 6, 19, 19, 135, 270);
-            using var arc = new Pen(ColorFor(h), 4) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round };
-            g.DrawArc(arc, 6, 6, 19, 19, 135, 190);
-            using var dot = new SolidBrush(Color.FromArgb(230, 233, 239));
-            g.FillEllipse(dot, 13, 13, 6, 6);
-        }
-        var handle = bmp.GetHicon();
-        using var tmp = Icon.FromHandle(handle);
-        var icon = (Icon)tmp.Clone();
-        DestroyIcon(handle);
-        return icon;
-    }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool DestroyIcon(IntPtr handle);
 }

@@ -30,8 +30,17 @@ public sealed class ServerConfig
     /// <summary>Where new SYSCOM app / web client releases are announced (feed.json, see docs/UPDATES.md).</summary>
     public string? UpdateFeedUrl { get; set; } = "https://github.com/rotate4all/syscom/releases/latest/download/feed.json";
 
-    /// <summary>Check all components for updates once a day (never installs on its own).</summary>
+    /// <summary>Check every component for updates every <see cref="UpdateCheckHours"/> hours.</summary>
     public bool AutoCheckUpdates { get; set; } = true;
+
+    /// <summary>How often the update check runs, in hours (1 to 168).</summary>
+    public int UpdateCheckHours { get; set; } = 6;
+
+    /// <summary>
+    /// What a check installs by itself: "syscom" (SYSCOM and its web dashboard, the default), "all" (every component,
+    /// including LibreHardwareMonitor, PawnIO and the .NET runtime) or "off" (only report, install from the tray app).
+    /// </summary>
+    public string AutoUpdate { get; set; } = "syscom";
 
     /// <summary>Arguments for a silent PawnIO_setup.exe install/upgrade.</summary>
     public string PawnIoInstallArgs { get; set; } = "-install -silent";
@@ -62,6 +71,8 @@ public sealed class ServerConfig
         }
         cfg.FilePath = path;
         if (cfg.MinIntervalMs < 100) cfg.MinIntervalMs = 100;
+        cfg.UpdateCheckHours = Math.Clamp(cfg.UpdateCheckHours, 1, 168);
+        if (cfg.AutoUpdate is not ("syscom" or "all" or "off")) cfg.AutoUpdate = "syscom";
         return cfg;
     }
 

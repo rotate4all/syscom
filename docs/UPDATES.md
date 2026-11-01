@@ -23,7 +23,25 @@ Each component reports **Ok / Warning / Error** with a reason, for example:
 - Web: `web\` missing, so the copy built into the exe is in use (warning)
 
 The tray icon turns amber or red when any component is unhealthy, and pops a notification when updates are available.
-The server checks every source once a day (`AutoCheckUpdates`). It **never installs anything on its own**.
+
+## Automatic updates
+
+The server checks every source every `UpdateCheckHours` (6 by default) and, depending on `AutoUpdate` (tray app main window →
+**Install updates automatically**), installs what it found by itself:
+
+| `AutoUpdate` | Installs on its own | Tray app label |
+| --- | --- | --- |
+| `syscom` (default) | SYSCOM and the web dashboard, from this repository's releases | SYSCOM and its dashboard (recommended) |
+| `all` | every component, LibreHardwareMonitor, PawnIO and .NET included | Every component |
+| `off` | nothing: updates are only announced, and installed with one click | Off: only tell me |
+
+- An update that restarts SYSCOM (everything but the web dashboard) waits until no dashboard is connected, for at
+  most 24 hours, so a wall display doesn't block it forever. The web dashboard is swapped live.
+- Installation goes through the same checksum checks, backup and health-checked rollback as a click in the tray app.
+  A version that failed or was rolled back is not tried again automatically (a newer one is).
+- Open dashboards check the PC they were opened from every 15 minutes and reload themselves when it has a newer
+  dashboard, once nothing is being edited.
+- `AutoCheckUpdates: false` turns checking (and so automatic installing) off.
 
 ## Verification
 
@@ -57,8 +75,8 @@ release built against that LHM version fixes it.
 
 ```json
 {
-  "syscom": "0.1.0",
-  "web": "0.1.0",
+  "syscom": "0.17.0",
+  "web": "0.17.0",
   "dotnet": { "channel": "10.0", "runtime": "latest" },
   "librehardwaremonitor": "0.9.6",
   "pawnio": "latest",
@@ -75,9 +93,15 @@ and verifies the runtime and PawnIO, and writes to `dist\`:
 
 ## Cutting a release
 
-1. Update `versions.json` (`syscom`, and `web` if the dashboard changed) and `CHANGELOG.md`.
-2. Merge to `main`, then tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. The **Release** workflow builds the package on Windows and publishes a GitHub release with all files from `dist\`.
+1. In the pull request, bump `versions.json` (`syscom`, and `web` if the dashboard changed) and add the version's
+   section to `CHANGELOG.md` (`## [x.y.z] - date`). Feature requests bump the minor version, fixes the patch.
+2. Merge it to `main`. The **Release** workflow sees the new version, builds the package on Windows and publishes the
+   GitHub release `vx.y.z` on that commit, with all files from `dist\` and the changelog section as release notes.
+   (Pushing a `v*` tag by hand still works; a version that already has a release is skipped.)
+3. Installed PCs pick it up at their next check (see Automatic updates), or right away with **Check for updates**
+   and **Update all** in the tray app.
+
+A manual run of the workflow (Actions → Release → Run workflow) only builds the package and keeps it as an artifact.
 
 Installed copies read `https://github.com/rotate4all/syscom/releases/latest/download/feed.json`. Change
 `UpdateFeedUrl` in `%ProgramData%\SYSCOM\config.json` to host releases elsewhere. Note that `releases/latest`
@@ -98,7 +122,10 @@ zips somewhere reachable and point `UpdateFeedUrl` at it.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `UpdateFeedUrl` | GitHub latest release `feed.json` | where SYSCOM/web updates are announced; empty disables them |
-| `AutoCheckUpdates` | `true` | daily check (never installs) |
+| `AutoCheckUpdates` | `true` | check for updates every `UpdateCheckHours` |
+| `UpdateCheckHours` | `6` | hours between checks (1 to 168) |
+| `AutoUpdate` | `syscom` | what is installed automatically: `syscom` (SYSCOM and dashboard), `all`, or `off` (notify only) |
+| `TokenLifetimeDays` | `30` | how long a sign-in lasts after its last use (open dashboards renew it daily) |
 | `MinPawnIoVersion` | `2.2.0` | older PawnIO is flagged as a security error |
 | `PawnIoInstallArgs` | `-install -silent` | arguments for the PawnIO setup |
 | `MinIntervalMs` | `500` | fastest polling a browser may request |

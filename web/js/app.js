@@ -1,15 +1,16 @@
 import {
-  load, save, normalizeDevice, normalizeLayouts, normalizeUrl, exportLayout, uid, MIN_INTERVAL,
-  layoutMode, setLayoutMode, adoptPhoneView,
+  load, save, normalizeDevice, normalizeLayouts, normalizeDash, normalizeLook, normalizeItems, normalizeUrl, uid,
+  INTERVALS, DEFAULT_INTERVAL, MIN_INTERVAL, MAX_SAVED, LOOK_DEFAULTS, layoutMode, setLayoutMode, adoptPhoneView, layoutItems,
 } from './store.js';
-import { Connection } from './connection.js';
+import { Connection, probe } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, unitLabel, decimalsFor, totalFor, effectiveMaxFrom, displayUnit,
-  isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf,
+  isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf, pct,
   MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, NUMBER_SIZE, UNIT_POS, unitPosOf, MAX_EXTRA_LABEL, extraLabel, extrasOf, readingText, HISTORY,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
+import { exportLayout, readLayoutFile, remapLayout, fileName } from './transfer.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const state = load();
@@ -17,6 +18,7 @@ const conns = new Map();   // device.key → Connection
 const pages = new Map();   // device.key → { section, board, msg, widgets: Map(widgetId → instance) }
 let active = 0;
 let editing = false;
+let homeId = null;         // server id of the PC that served this page (keeps the device list, relays to the others)
 
 const ICON = {
   grip: '<svg viewBox="0 0 24 24"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke-width="3.2"/></svg>',
@@ -50,8 +52,17 @@ function connectionFor(dev) {
   c.addEventListener('catalog', () => { if (!refreshPage(dev)) renderPage(dev); c.subscribe(); });
   c.addEventListener('data', (e) => onData(dev, e.detail));
   c.addEventListener('layout', (e) => syncLayout(dev, e.detail.rev));
+  c.addEventListener('devices', (e) => { if (c.home) syncDevices(c, e.detail.rev); });
+  c.addEventListener('status', () => { if (c.status === 'online' && c.home) checkWebVersion(); });
+  setHome(c);
   conns.set(dev.key, c);
   return c;
+}
+
+/** The PC that served the page keeps the device list and relays to the other PCs (see Connection.base). */
+function setHome(c) {
+  c.home = !!homeId && c.device.serverId === homeId;
+  c.relayAvailable = !!homeId && location.protocol.startsWith('http');
 }
 
 function onData(dev, frame) {
@@ -65,6 +76,15 @@ function onData(dev, frame) {
     a.push(frame.v[i]);
     if (a.length > HISTORY) a.shift();
   }
+  paintFrame(dev, frame);
+  if (dlgWidget.open && editTarget?.dev === dev) { takeFrame(conn, frame); paintLive(); }
+}
+
+/** Puts a frame's readings on a page's cards; also right after the page is rebuilt, so no card waits blank. */
+function paintFrame(dev, frame) {
+  const page = pages.get(dev.key);
+  const conn = conns.get(dev.key);
+  if (!page || !conn || !frame) return;
   const visible = state.devices[active] === dev && document.visibilityState === 'visible';
   for (const w of dev.widgets) {
     const inst = page.widgets.get(w.id);
@@ -75,16 +95,29 @@ function onData(dev, frame) {
     }, 0) : null;
     inst.update(conn.value(frame, w.sensor), visible, max, w.extra?.map((x) => conn.value(frame, x.sensor)));
   }
-  if (dlgWidget.open && editTarget?.dev === dev) { takeFrame(conn, frame); paintLive(); }
 }
 
-async function addDevice(url, { quiet = false } = {}) {
+/**
+ * Adds a PC by address (or one found on the network, with its server id). From a dashboard opened over HTTPS the
+ * PC is tried directly first; when this browser doesn't trust its certificate (each PC has its own), the PC that
+ * served the page relays to it, so nothing has to be installed for it.
+ */
+async function addDevice(url, { quiet = false, id = null } = {}) {
   const normalized = normalizeUrl(url);
-  const probe = new Connection({ url: normalized, widgets: [] });
-  probe.device.httpsPort = normalized.startsWith('https:') ? Number(new URL(normalized).port) : null;
-  const info = await probe.info();
+  const target = new URL(normalized);
+  let info;
+  let route = 'direct';
+  try {
+    info = await probe(normalized);
+  } catch (ex) {
+    if (location.protocol !== 'https:' || !homeId) throw ex;
+    // An HTTPS address typed or found → that PC's plain HTTP port, which the relay talks to.
+    const httpPort = target.port === '47812' || !target.port ? 47810 : Number(target.port);
+    try { info = await probe(`${location.origin}/relay/${id || `${target.hostname}-${httpPort}`}`); } catch { throw ex; }
+    route = 'relay';
+  }
   // Store the plain HTTP address plus the HTTPS port; the connection picks whichever this page needs.
-  const host = new URL(normalized).hostname;
+  const host = target.hostname;
   const httpUrl = `http://${host}:${info.port || 47810}`;
   const existing = state.devices.find((d) => d.serverId === info.id || d.url === httpUrl);
   if (existing) {
@@ -94,9 +127,11 @@ async function addDevice(url, { quiet = false } = {}) {
   }
   const dev = normalizeDevice({ key: uid(), serverId: info.id, url: httpUrl, httpsPort: info.httpsPort, name: info.name });
   state.devices.push(dev);
-  persist();
+  devicesChanged();
   renderPages();
-  connectionFor(dev).connect();
+  const conn = connectionFor(dev);
+  if (!conn.home) conn.route = route;
+  conn.connect();
   if (!quiet) goTo(state.devices.length - 1);
   return dev;
 }
@@ -105,33 +140,123 @@ function removeDevice(dev) {
   conns.get(dev.key)?.stop();
   conns.delete(dev.key);
   state.devices = state.devices.filter((d) => d !== dev);
-  persist();
+  devicesChanged();
   renderPages();
+}
+
+// ---------- device list, kept on the PC that serves this page
+// A browser keeps its data per address: http://localhost, http://<IP> and https://<IP> of the same PC each start
+// with an empty list. So the list also lives on the PC that served the page: a browser that signs in there finds the
+// other PCs again (each still asks for its own sign-in), and every phone and browser using that PC shares one list.
+// The first sync merges both lists; after that the latest change wins, like the dashboards.
+
+/** The list as stored on the PC: no sign-ins, and no address for the PC itself (each browser knows how it got there). */
+function deviceListForServer() {
+  return state.devices.map((d) => ({ id: d.serverId, name: d.name, url: d.serverId === homeId ? null : d.url, httpsPort: d.httpsPort }));
+}
+
+let homeInfo = null;   // /api/info of the PC that served this page
+/** This PC's plain HTTP address, as this browser reaches it. */
+function homeHttpUrl() { return `http://${location.hostname}:${homeInfo?.port || 47810}`; }
+
+function homeConn() {
+  const dev = state.devices.find((d) => d.serverId && d.serverId === homeId);
+  return dev && conns.get(dev.key);
+}
+
+function devicesChanged() {
+  state.devicesDirty = true;
+  persist();
+  clearTimeout(devicesChanged.timer);
+  devicesChanged.timer = setTimeout(() => { const c = homeConn(); if (c?.status === 'online') syncDevices(c, null); }, 300);
+}
+
+let syncingDevices = false;
+async function syncDevices(conn, announcedRev) {
+  if (syncingDevices || conn.status !== 'online') return;
+  if (announcedRev != null && announcedRev === state.devicesRev && !state.devicesDirty && state.devicesSynced) return;
+  syncingDevices = true;
+  try {
+    const saved = await conn.loadDevices();
+    const list = Array.isArray(saved.devices) ? saved.devices : [];
+    if (!state.devicesSynced) {
+      // First time this browser meets this PC: keep both lists.
+      adoptDevices(list, { removeMissing: false });
+      state.devicesSynced = true;
+      state.devicesRev = saved.rev;
+      const there = new Set(list.map((x) => x.id || x.url));
+      if (state.devices.some((d) => !there.has(d.serverId || d.url))) state.devicesDirty = true;
+    } else if (!state.devicesDirty && saved.rev !== state.devicesRev) {
+      adoptDevices(list, { removeMissing: true });
+      state.devicesRev = saved.rev;
+    }
+    if (state.devicesDirty) {
+      state.devicesRev = await conn.saveDevices(deviceListForServer());
+      state.devicesDirty = false;
+    }
+    persist();
+  } catch { /* offline or signed out: the next connection tries again */ }
+  finally { syncingDevices = false; }
+}
+
+/** Takes the PC's list: new PCs are added (signed out), names and order follow it, PCs removed elsewhere go. */
+function adoptDevices(list, { removeMissing }) {
+  const byId = new Map(state.devices.map((d) => [d.serverId || d.url, d]));
+  const next = [];
+  let changed = false;
+  for (const x of list) {
+    let d = byId.get(x.id || x.url);
+    if (d) {
+      byId.delete(x.id || x.url);
+      if (x.name && d.name !== x.name) { d.name = x.name; changed = true; }
+      if (x.httpsPort && !d.httpsPort) d.httpsPort = x.httpsPort;
+    } else {
+      if (!x.url && x.id !== homeId) continue;   // nothing to reach it by
+      const url = x.id === homeId ? homeHttpUrl() : x.url;
+      d = normalizeDevice({ key: uid(), serverId: x.id, url, httpsPort: x.httpsPort, name: x.name });
+      changed = true;
+    }
+    next.push(d);
+  }
+  for (const d of byId.values()) {
+    if (!removeMissing || d.serverId === homeId) next.push(d);   // this PC itself always stays
+    else { conns.get(d.key)?.stop(); conns.delete(d.key); changed = true; }
+  }
+  if (!changed && next.every((d, i) => d === state.devices[i])) return;
+  state.devices = next;
+  renderPages();
+  for (const d of state.devices) { const c = connectionFor(d); if (c.status === 'idle') c.connect(); }
 }
 
 // ---------- dashboard layout: saved on each PC, cached in this browser
 
 /**
- * Saves a changed layout here right away and on the PC shortly after (edits come in bursts while dragging).
+ * Saves a changed dashboard here right away and on the PC shortly after (edits come in bursts while dragging).
  * `adopt: false` when the phone layout was just dropped on purpose (else a phone edit makes it the phone's own).
+ * `track: false` for changes that are not undoable steps (undo/redo themselves, appearance).
  */
-function saveLayout(dev, { adopt = true } = {}) {
+function saveLayout(dev, { adopt = true, track = true } = {}) {
   if (adopt) adoptPhoneView(dev);
+  if (track) recordUndo(dev);
   dev.layoutDirty = true;
   persist();
   clearTimeout(dev._pushTimer);
   dev._pushTimer = setTimeout(() => pushLayout(dev), 400);
+  if (dev === state.devices[active]) updateHeader();
 }
+
+/** What a push sends (and what tells whether another edit came in meanwhile). */
+const dashJson = (dev) => JSON.stringify([dev.layouts, dev.look, dev.saved, dev.current]);
 
 async function pushLayout(dev) {
   const conn = conns.get(dev.key);
   if (!conn || conn.status !== 'online' || dev._pushing) return;
   dev._pushing = true;
-  const sent = JSON.stringify(dev.layouts);
+  const sent = dashJson(dev);
   try {
-    const rev = await conn.saveDashboard(dev.layouts);
+    const rev = await conn.saveDashboard(dev);
     dev.layoutRev = rev;
-    if (JSON.stringify(dev.layouts) === sent) dev.layoutDirty = false;   // else another edit came in meanwhile
+    if (dashJson(dev) === sent) dev.layoutDirty = false;   // else another edit came in meanwhile
     persist();
   } catch { /* offline: stays dirty and is sent on reconnect */ }
   finally {
@@ -140,26 +265,85 @@ async function pushLayout(dev) {
   }
 }
 
-/** The PC announced its layout revision (on connect and after every save from any browser). */
+/** The PC announced its dashboard revision (on connect and after every save from any browser). */
 async function syncLayout(dev, rev) {
   if (dev.layoutDirty) { pushLayout(dev); return; }     // changes made here (perhaps offline) win
-  if (dev._pushing || rev === dev.layoutRev) return;
+  if (dev._pushing || rev === dev.layoutRev) { loadBackground(dev); return; }
   const conn = conns.get(dev.key);
   let saved;
   try { saved = await conn.loadDashboard(); } catch { return; }   // offline or signed out; the next announcement retries
   if (!saved.rev || !Array.isArray(saved.widgets)) {
-    // Nothing on the PC yet: this browser's layouts become the PC's.
-    if (dev.layouts.desktop.length || dev.layouts.phone) { dev.layoutDirty = true; pushLayout(dev); }
+    // Nothing on the PC yet: this browser's dashboard becomes the PC's.
+    if (dev.layouts.desktop.length || dev.layouts.phone || dev.saved.length) { dev.layoutDirty = true; pushLayout(dev); }
     return;
   }
   if (dev.layoutDirty || saved.rev === dev.layoutRev) return;
-  dev.layouts = normalizeLayouts(saved.widgets, saved.phone);
+  Object.assign(dev, normalizeDash(saved));
   dev.layoutRev = saved.rev;
   persist();
+  resetUndo(dev);    // another browser changed it: the undo steps no longer apply
+  applyLook(dev);
   const p = pages.get(dev.key);
   if (p?.dragging) p.pending = true; else renderPage(dev);
   conn.subscribe();
+  if (dlgLayouts.open && layoutsDev === dev) renderLayouts();
 }
+
+// ---------- undo / redo of dashboard edits (the last few steps per PC and layout, while this page is open)
+const UNDO_STEPS = 5;
+const undos = new Map();   // `${dev.key}|${layoutMode()}` → { base: JSON, past: [], future: [] }
+const undoOf = (dev) => {
+  const k = `${dev.key}|${layoutMode()}`;
+  let u = undos.get(k);
+  if (!u) undos.set(k, (u = { base: JSON.stringify(dev.layouts), past: [], future: [] }));
+  return u;
+};
+
+/** Before the first change of a page: remember how it looked. */
+function primeUndo(dev) { undoOf(dev); }
+
+function recordUndo(dev) {
+  const u = undoOf(dev);
+  const now = JSON.stringify(dev.layouts);
+  if (now === u.base) return;
+  u.past.push(u.base);
+  if (u.past.length > UNDO_STEPS) u.past.shift();
+  u.future = [];
+  u.base = now;
+  updateUndoButtons();
+}
+
+function resetUndo(dev) {
+  for (const k of [...undos.keys()]) if (k.startsWith(dev.key + '|')) undos.delete(k);
+  updateUndoButtons();
+}
+
+function undoRedo(dir) {
+  const dev = state.devices[active];
+  if (!dev) return;
+  const u = undoOf(dev);
+  const from = dir < 0 ? u.past : u.future;
+  if (!from.length) return;
+  (dir < 0 ? u.future : u.past).push(u.base);
+  u.base = from.pop();
+  const l = JSON.parse(u.base);
+  dev.layouts = normalizeLayouts(l.desktop, l.phone);
+  saveLayout(dev, { adopt: false, track: false });
+  renderPage(dev);
+  conns.get(dev.key)?.subscribe();
+  updateUndoButtons();
+}
+
+function updateUndoButtons() {
+  const dev = state.devices[active];
+  const u = dev && undos.get(`${dev.key}|${layoutMode()}`);
+  $('#btn-undo').disabled = !u?.past.length;
+  $('#btn-redo').disabled = !u?.future.length;
+  $('#btn-undo').title = u?.past.length ? `Undo (${u.past.length} step${u.past.length > 1 ? 's' : ''})` : 'Nothing to undo';
+  $('#btn-redo').title = u?.future.length ? `Redo (${u.future.length} step${u.future.length > 1 ? 's' : ''})` : 'Nothing to redo';
+}
+$('#btn-undo').onclick = () => undoRedo(-1);
+$('#btn-redo').onclick = () => undoRedo(1);
 
 // ---------- rendering
 function renderPages() {
@@ -178,7 +362,7 @@ function renderPages() {
       const board = document.createElement('div');
       board.className = 'board';
       section.append(msg, board);
-      p = { section, msg, board, widgets: new Map(), series: new Map(), cols: 0 };
+      p = { section, msg, board, widgets: new Map(), series: new Map(), cols: 0, motion: { on: false, ms: 0 } };
       // Columns follow the page width: 4 on a phone, up to 16 on a wide screen.
       p.ro = new ResizeObserver(() => applyColumns(p, dev));
       p.ro.observe(board);
@@ -200,6 +384,7 @@ function renderPages() {
         if (p.pending) { p.pending = false; renderPage(dev); }
       });
       pages.set(dev.key, p);
+      applyLook(dev);
       renderPage(dev);
     }
     host.append(p.section); // re-append keeps DOM order in sync with state
@@ -269,7 +454,7 @@ function renderPage(dev) {
         let a = p.series.get(id);
         if (!a) p.series.set(id, (a = []));
         return a;
-      });
+      }, { motion: p.motion });
       inst.maxFrom = effectiveMaxFrom(w, sensor, conn.catalog);
       inst.signature = widgetSignature(w, conn);
       inst.el.addEventListener('click', (e) => {
@@ -326,6 +511,15 @@ function renderPage(dev) {
     tools.append(same);
   }
   tools.prepend(which);
+  const button = (text, onclick) => {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = text;
+    b.onclick = onclick;
+    tools.append(b);
+  };
+  button('Layouts…', () => openLayouts(dev));
+  button('Appearance…', () => openLook(dev));
   if (dev.widgets.length) {
     const reset = document.createElement('button');
     reset.className = 'ghost';
@@ -338,8 +532,10 @@ function renderPage(dev) {
     tools.append(reset);
   }
   p.board.append(tools);
+  primeUndo(dev);
   applyColumns(p, dev, true);
   renderMessage(dev);
+  paintFrame(dev, conn.last);
 }
 
 function sectionHead(dev, sec, group) {
@@ -491,7 +687,19 @@ function updateHeader() {
   const status = dev ? conns.get(dev.key)?.status || 'idle' : 'idle';
   $('#status').className = 'dot ' + status;
   $('#status').title = status;
+  // The saved layout on screen, if any (marked when changed since it was loaded).
+  const which = layoutMode();
+  const saved = dev && dev.saved.find((x) => x.id === dev.current[which]);
+  const tag = $('#layout-name');
+  tag.hidden = !saved;
+  if (saved) {
+    const changed = layoutShape(saved.items) !== layoutShape(layoutItems(dev, which));
+    tag.textContent = saved.name + (changed ? ' •' : '');
+    tag.title = `Layout "${saved.name}"${changed ? ', changed since it was loaded or saved' : ''}. Click to switch.`;
+  }
+  updateUndoButtons();
 }
+$('#layout-name').onclick = () => { const dev = state.devices[active]; if (dev) openLayouts(dev); };
 
 function goTo(i) {
   const host = $('#pages');
@@ -507,6 +715,7 @@ function setActive(i) {
   updateHeader();
   const dev = state.devices[active];
   if (dev) pages.get(dev.key)?.widgets.forEach((w) => w.refresh());
+  if (dev && state.fullscreen) toast(dev.name);
 }
 
 // ---------- swipe tracking (native scroll-snap does the gesture)
@@ -554,6 +763,7 @@ $('#btn-edit').onclick = () => {
   editing = !editing;
   document.body.classList.toggle('editing', editing);
   $('#btn-edit').setAttribute('aria-pressed', String(editing));
+  updateUndoButtons();
 };
 
 // ---------- phone preview: the dashboard at phone width (4 columns), to lay it out for the people who use it there
@@ -649,7 +859,7 @@ function openWidgetEditor(dev, widget, sectionId = null) {
 const liveValues = new Map();   // sensor id → latest value, while the editor is open
 function takeFrame(conn, frame) {
   if (!frame) return;
-  for (const [id, i] of conn.index) liveValues.set(id, frame.v[i]);
+  for (const [id, i] of frame.index || conn.index) liveValues.set(id, frame.v[i]);
 }
 function paintLive() {
   const conn = conns.get(editTarget?.dev.key);
@@ -842,6 +1052,9 @@ function fillWidgetForm(w, sensor, catalog) {
   $('#w-thick').value = String(Math.round(thicknessOf(w) * 100));
   $('#w-nsize').value = NUMBER_SIZE.some(([k]) => k === w.numSize) ? w.numSize : 'm';
   $('#w-upos').value = unitPosOf(w);
+  $('#w-scale-show').checked = !w.hideScale;
+  setPctSelect('#w-alpha', w.alpha, '% opaque');
+  setPctSelect('#w-round', w.round, '% rounded');
   syncThickness();
   extrasShown = extrasOf(w);
   renderExtras();
@@ -905,11 +1118,19 @@ $('#w-type').addEventListener('change', () => {
 for (const [k, l] of NUMBER_SIZE) $('#w-nsize').add(new Option(l, k));
 for (const [k, l] of UNIT_POS) $('#w-upos').add(new Option(l, k));
 
-/** Thickness applies to gauges, bars and graph lines; a big number has a number size and unit position instead. */
+/** A card's own opacity or rounding ('' = the dashboard's); a value set elsewhere gets its own choice. */
+function setPctSelect(sel, value, suffix) {
+  const v = pct(value);
+  const box = $(sel);
+  if (v != null && ![...box.options].some((o) => o.value === String(v))) box.add(new Option(`${v}${suffix}`, String(v)));
+  box.value = v == null ? '' : String(v);
+}
+
+/** Thickness applies to gauges, bars and graph lines; min/max values to bars. Every type has a value size and suffix. */
 function syncThickness() {
   const type = $('#w-type').value;
   $('#w-thick-field').hidden = type === 'value';
-  $('#w-num-field').hidden = type !== 'value';
+  $('#w-scale-field').hidden = type !== 'bar' && type !== 'vbar';
   $('#w-thick-name').textContent = type === 'graph' ? 'Line thickness' : type === 'gauge' ? 'Arc thickness' : 'Bar thickness';
   const v = Number($('#w-thick').value);
   $('#w-thick-out').textContent = `${v}%${v === 100 ? ' (default)' : ''}`;
@@ -1096,8 +1317,11 @@ function readForm(id) {
     style: $('#w-type').value === 'gauge' ? $('#w-style').value : undefined,
     pos: positionsFor($('#w-type').value) ? $('#w-pos').value : undefined,
     thick: $('#w-type').value !== 'value' && Number($('#w-thick').value) !== 100 ? Number($('#w-thick').value) : undefined,
-    numSize: $('#w-type').value === 'value' && $('#w-nsize').value !== 'm' ? $('#w-nsize').value : undefined,
-    unitPos: $('#w-type').value === 'value' && $('#w-upos').value !== 'right' ? $('#w-upos').value : undefined,
+    numSize: $('#w-nsize').value !== 'm' ? $('#w-nsize').value : undefined,
+    unitPos: $('#w-upos').value !== 'right' ? $('#w-upos').value : undefined,
+    hideScale: ['bar', 'vbar'].includes($('#w-type').value) && !$('#w-scale-show').checked ? true : undefined,
+    alpha: $('#w-alpha').value === '' ? undefined : Number($('#w-alpha').value),
+    round: $('#w-round').value === '' ? undefined : Number($('#w-round').value),
     extra: extrasShown.length ? extrasShown.filter((x) => x.sensor !== $('#w-sensor').value).slice(0, MAX_EXTRA) : undefined,
     label: $('#w-label').value.trim(),
     sub: $('#w-sub').value.trim() || undefined,
@@ -1206,21 +1430,21 @@ function renderSettings() {
     li.innerHTML = `
       <span class="dot ${conn?.status || 'idle'}"></span>
       <span class="grow"><input class="name" value="${escapeHtml(dev.name)}" aria-label="Device name"><span class="sub">${escapeHtml(conn?.base || dev.url)}${conn?.secure ? ' · secure' : ''}</span></span>
-      <label class="interval">Every <input type="number" min="${MIN_INTERVAL}" step="100" value="${dev.interval}"> ms</label>
+      <label class="interval">Every <select aria-label="How often ${escapeHtml(dev.name)} sends readings">${intervalOptions(dev.interval)}</select></label>
       <button data-a="up" title="Move up">↑</button>
       ${dev.token ? '<button data-a="logout">Sign out</button>' : ''}
       <button data-a="remove" class="danger">Remove</button>`;
-    $('input.name', li).onchange = (e) => { dev.name = e.target.value.trim() || dev.name; persist(); updateHeader(); renderDots(); };
-    $('.interval input', li).onchange = (e) => {
-      dev.interval = Math.max(MIN_INTERVAL, Math.round(Number(e.target.value) || 1000));
-      e.target.value = dev.interval;
+    $('input.name', li).onchange = (e) => { dev.name = e.target.value.trim() || dev.name; devicesChanged(); updateHeader(); renderDots(); };
+    $('.interval select', li).onchange = (e) => {
+      dev.interval = Math.max(MIN_INTERVAL, Number(e.target.value) || DEFAULT_INTERVAL);
       persist();
+      applyLook(dev);   // animations follow the interval
       conn?.subscribe();
     };
     $('[data-a="up"]', li).onclick = () => {
       if (i === 0) return;
       [state.devices[i - 1], state.devices[i]] = [state.devices[i], state.devices[i - 1]];
-      persist(); renderPages(); renderSettings();
+      devicesChanged(); renderPages(); renderSettings();
     };
     $('[data-a="logout"]', li)?.addEventListener('click', () => { conn?.logout(); persist(); renderSettings(); });
     $('[data-a="remove"]', li).onclick = () => {
@@ -1230,6 +1454,12 @@ function renderSettings() {
   });
   renderPeers();
   renderAppInstall();
+}
+
+/** Polling choices: 0.5 s … 10 s (1 s is the default); an interval set some other way stays listed. */
+function intervalOptions(current) {
+  const list = INTERVALS.includes(current) ? INTERVALS : [...INTERVALS, current].sort((a, b) => a - b);
+  return list.map((ms) => `<option value="${ms}"${ms === current ? ' selected' : ''}>${ms < 1000 ? `${ms} ms` : `${ms / 1000} s`}${ms === DEFAULT_INTERVAL ? ' (default)' : ''}</option>`).join('');
 }
 
 function renderAppInstall() {
@@ -1253,8 +1483,8 @@ async function renderPeers() {
   await Promise.all([...conns.values()].map(async (c) => {
     try {
       for (const p of await c.peers()) {
-        // From an HTTPS dashboard only HTTPS peers are reachable.
-        const url = location.protocol === 'https:' ? p.httpsUrl : p.url;
+        // From an HTTPS dashboard a PC is reached over HTTPS, or through this PC's relay.
+        const url = location.protocol === 'https:' ? p.httpsUrl || p.url : p.url;
         if (!known.has(p.id) && url) seen.set(p.id, { ...p, url });
       }
     } catch { /* offline */ }
@@ -1264,7 +1494,9 @@ async function renderPeers() {
     const li = document.createElement('li');
     li.innerHTML = `<span class="grow">${escapeHtml(p.name)}<span class="sub">Found on your network · ${escapeHtml(p.url)}</span></span><button>Add</button>`;
     $('button', li).onclick = async () => {
-      try { await addDevice(p.url); renderSettings(); } catch (ex) { showAddError(ex); }
+      const b = $('button', li);
+      b.disabled = true; b.textContent = 'Adding…';
+      try { await addDevice(p.url, { id: p.id }); renderSettings(); } catch (ex) { showAddError(ex); b.disabled = false; b.textContent = 'Add'; }
     };
     list.append(li);
   }
@@ -1283,48 +1515,14 @@ $('#add-device').onsubmit = async (e) => {
 };
 
 function showAddError(ex) {
-  $('#add-error').textContent = ex instanceof TypeError
-    ? 'Could not reach that address. Check the IP and port, and that SYSCOM is running.'
+  $('#add-error').textContent = ex instanceof TypeError || ex?.name === 'TimeoutError' || ex?.name === 'AbortError'
+    ? 'Could not reach that address. Check the IP and port, and that SYSCOM is running there.'
     : ex.message;
   $('#add-error').hidden = false;
 }
 
-$('#btn-export').onclick = () => {
-  const blob = new Blob([exportLayout(state)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'syscom-layout.json';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-};
-
-$('#import-file').onchange = async (e) => {
-  const file = e.target.files[0];
-  e.target.value = '';
-  if (!file) return;
-  try {
-    const data = JSON.parse(await file.text());
-    if (data.app !== 'syscom' || !Array.isArray(data.devices)) throw new Error('Not a SYSCOM layout file.');
-    for (const d of data.devices) {
-      const existing = state.devices.find((x) => (d.serverId && x.serverId === d.serverId) || x.url === d.url);
-      if (existing) {
-        existing.layouts = normalizeLayouts(d.layouts?.desktop ?? d.widgets, d.layouts?.phone);
-        existing.layoutDirty = true;   // goes to the PC on the next connection
-        existing.interval = d.interval || existing.interval;
-        existing.name = d.name || existing.name;
-      } else state.devices.push(normalizeDevice({ ...d, key: uid(), token: null, layoutDirty: true }));
-    }
-    if (data.theme) state.theme = data.theme;
-    persist();
-    pages.forEach((p) => p.section.remove());
-    pages.clear();
-    renderPages();
-    state.devices.forEach((d) => { connectionFor(d).connect(); renderPage(d); });
-    renderSettings();
-  } catch (ex) {
-    alert('Import failed: ' + ex.message);
-  }
-};
+$('#btn-open-layouts').onclick = () => { const dev = state.devices[active]; if (dev) { dlgSettings.close(); openLayouts(dev); } };
+$('#btn-open-look').onclick = () => { const dev = state.devices[active]; if (dev) { dlgSettings.close(); openLook(dev); } };
 
 // ---------- history: tap a card for its sensor's last 1 to 30 days
 const dlgHistory = $('#dlg-history');
@@ -1405,6 +1603,424 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ---------- appearance: background, card opacity, corner rounding, animations (one per PC, saved with its dashboard)
+const backgrounds = new Map();      // dev.key → { id, url } of the loaded picture
+const bgLoading = new Map();        // dev.key → id being fetched
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+/** How long a change glides, in ms: most of one polling interval, so motion is continuous; 0 = off. */
+function motionMs(dev, look = dev.look) {
+  if (look.anim === 'off' || reducedMotion.matches) return 0;
+  return Math.round(Math.min(1500, Math.max(250, dev.interval * 0.85)));
+}
+
+/** Puts a PC's look on its page; `look` may be a draft (the appearance editor previews it live). */
+function applyLook(dev, look = dev.look, picture = null) {
+  const p = pages.get(dev.key);
+  if (!p) return;
+  const st = p.section.style;
+  const ms = motionMs(dev, look);
+  p.motion.on = ms > 0;
+  p.motion.ms = ms;
+  st.setProperty('--anim', `${ms}ms`);
+  st.setProperty('--a', String(look.alpha / 100));
+  st.setProperty('--rf', String(look.round / 100));
+  st.setProperty('--cap', look.round >= 50 ? 'round' : 'butt');
+  p.section.classList.toggle('see-through', look.alpha < 100);
+
+  const bg = picture || (look.bg === 'image' && backgrounds.get(dev.key)?.id === look.image ? backgrounds.get(dev.key).url : null);
+  const layers = [];
+  const sizes = [];
+  const repeats = [];
+  if (look.bg === 'image' && bg && look.dim) {
+    const fade = `color-mix(in srgb, var(--bg) ${look.dim}%, transparent)`;
+    layers.push(`linear-gradient(${fade}, ${fade})`); sizes.push('100% 100%'); repeats.push('no-repeat');
+  }
+  if (look.bg === 'image' && bg) {
+    layers.push(`url("${bg}")`);
+    sizes.push(look.fit === 'tile' ? 'auto' : look.fit);
+    repeats.push(look.fit === 'tile' ? 'repeat' : 'no-repeat');
+  }
+  st.backgroundImage = layers.join(', ');
+  st.backgroundSize = sizes.join(', ');
+  st.backgroundRepeat = repeats.join(', ');
+  st.backgroundPosition = layers.length ? 'center' : '';
+  st.backgroundColor = look.bg === 'color' ? look.color : '';
+  p.section.classList.toggle('has-bg', look.bg !== 'none');
+  if (!picture && look.bg === 'image' && look.image && backgrounds.get(dev.key)?.id !== look.image) loadBackground(dev);
+}
+
+/** Fetches the PC's background picture when the look names one this browser doesn't have yet. */
+async function loadBackground(dev) {
+  const id = dev.look.bg === 'image' ? dev.look.image : null;
+  const have = backgrounds.get(dev.key);
+  if (!id || have?.id === id || bgLoading.get(dev.key) === id) return;
+  const conn = conns.get(dev.key);
+  if (conn?.status !== 'online') return;
+  bgLoading.set(dev.key, id);
+  try {
+    const blob = await conn.loadBackground();
+    if (blob && dev.look.image === id) {
+      if (have) URL.revokeObjectURL(have.url);
+      backgrounds.set(dev.key, { id, url: URL.createObjectURL(blob) });
+      applyLook(dev);
+    }
+  } catch { /* offline: tried again on the next connection */ }
+  finally { bgLoading.delete(dev.key); }
+}
+reducedMotion.addEventListener?.('change', () => state.devices.forEach((d) => applyLook(d)));
+
+// The appearance editor: changes show on the page behind it right away and are saved with Save.
+const dlgLook = $('#dlg-look');
+let lookOf = null;   // { dev, draft, file (picked picture, not uploaded yet), fileUrl }
+
+function openLook(dev) {
+  lookOf = { dev, draft: structuredClone(dev.look), file: null, fileUrl: null };
+  $('#k-sub').textContent = dev.name;
+  $('#k-file-name').textContent = '';
+  dlgLook.returnValue = '';
+  fillLook();
+  dlgLook.showModal();
+}
+
+function fillLook() {
+  const d = lookOf.draft;
+  document.querySelectorAll('#k-bg button').forEach((b) => b.classList.toggle('active', b.dataset.bg === d.bg));
+  document.querySelectorAll('#k-anim button').forEach((b) => b.classList.toggle('active', b.dataset.anim === d.anim));
+  $('#k-color-field').hidden = d.bg !== 'color';
+  $('#k-image-field').hidden = d.bg !== 'image';
+  $('#k-color').value = d.color;
+  $('#k-fit').value = d.fit;
+  $('#k-dim').value = String(d.dim);
+  $('#k-alpha').value = String(d.alpha);
+  $('#k-round').value = String(d.round);
+  $('#k-dim-out').textContent = `${d.dim}%`;
+  $('#k-alpha-out').textContent = `${d.alpha}%${d.alpha === 100 ? ' (solid)' : d.alpha === 0 ? ' (transparent)' : ''}`;
+  $('#k-round-out').textContent = `${d.round}%${d.round === 100 ? ' (default)' : d.round === 0 ? ' (square)' : ''}`;
+  if (d.bg === 'image' && !lookOf.file && !d.image) $('#k-file-name').textContent = 'No picture yet.';
+  applyLook(lookOf.dev, d, lookOf.fileUrl);
+}
+
+$('#k-bg').addEventListener('click', (e) => { const v = e.target.closest('button')?.dataset.bg; if (v && lookOf) { lookOf.draft.bg = v; fillLook(); } });
+$('#k-anim').addEventListener('click', (e) => { const v = e.target.closest('button')?.dataset.anim; if (v && lookOf) { lookOf.draft.anim = v; fillLook(); } });
+for (const [id, key, num] of [['#k-color', 'color'], ['#k-fit', 'fit'], ['#k-dim', 'dim', 1], ['#k-alpha', 'alpha', 1], ['#k-round', 'round', 1]]) {
+  $(id).addEventListener('input', () => { if (!lookOf) return; lookOf.draft[key] = num ? Number($(id).value) : $(id).value; fillLook(); });
+}
+$('#k-reset').addEventListener('click', () => { if (!lookOf) return; lookOf.draft = { ...LOOK_DEFAULTS }; fillLook(); });
+$('#k-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file || !lookOf) return;
+  $('#k-file-name').textContent = 'Preparing…';
+  try {
+    const blob = await shrinkPicture(file);
+    if (lookOf.fileUrl) URL.revokeObjectURL(lookOf.fileUrl);
+    lookOf.file = blob;
+    lookOf.fileUrl = URL.createObjectURL(blob);
+    lookOf.draft.bg = 'image';
+    $('#k-file-name').textContent = `${file.name} (${Math.round(blob.size / 1024)} KB)`;
+    fillLook();
+  } catch {
+    $('#k-file-name').textContent = "That file can't be read as a picture.";
+  }
+});
+
+/** Large photos are scaled down (longest side 2560 px) and re-encoded, so they load fast on phones. */
+async function shrinkPicture(file, max = 2560) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  if (k === 1 && file.size <= 1.5 * 1024 * 1024 && /^image\/(jpeg|png|webp|gif|avif)$/.test(file.type)) { bmp.close?.(); return file; }
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k);
+  c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return new Promise((ok, fail) => c.toBlob((b) => (b ? ok(b) : fail(new Error('encode'))), 'image/jpeg', 0.86));
+}
+
+dlgLook.addEventListener('close', async () => {
+  const o = lookOf;
+  lookOf = null;
+  if (!o) return;
+  if (dlgLook.returnValue !== 'save') {
+    if (o.fileUrl) URL.revokeObjectURL(o.fileUrl);
+    applyLook(o.dev);
+    return;
+  }
+  const { dev } = o;
+  const look = normalizeLook(o.draft);
+  if (o.file) {
+    const conn = conns.get(dev.key);
+    try {
+      look.image = await conn.saveBackground(o.file);
+      const old = backgrounds.get(dev.key);
+      if (old) URL.revokeObjectURL(old.url);
+      backgrounds.set(dev.key, { id: look.image, url: o.fileUrl });
+    } catch (ex) {
+      URL.revokeObjectURL(o.fileUrl);
+      alert(`The picture couldn't be saved on ${dev.name}: ${ex.message}`);
+      if (!dev.look.image) look.bg = dev.look.bg;
+      look.image = dev.look.image;
+    }
+  }
+  if (look.bg === 'image' && !look.image) look.bg = 'none';
+  dev.look = look;
+  saveLayout(dev, { adopt: false, track: false });
+  applyLook(dev);
+  renderPage(dev);   // cards pick up the new motion setting
+});
+
+// ---------- layouts: saved layouts to switch between, export and import (one PC, desktop or phone layout)
+const dlgLayouts = $('#dlg-layouts');
+let layoutsDev = null;
+let layoutsWhich = 'desktop';
+
+function openLayouts(dev) {
+  layoutsDev = dev;
+  layoutsWhich = layoutMode();
+  $('#l-result').hidden = true;
+  $('#l-name').value = '';
+  renderLayouts();
+  dlgLayouts.showModal();
+}
+$('#btn-layouts').onclick = () => { const dev = state.devices[active]; if (dev) openLayouts(dev); };
+dlgLayouts.querySelector('[data-close]').onclick = () => dlgLayouts.close();
+dlgLayouts.addEventListener('click', (e) => { if (e.target === dlgLayouts) dlgLayouts.close(); });
+$('#l-which').addEventListener('click', (e) => {
+  const v = e.target.closest('button')?.dataset.which;
+  if (!v) return;
+  layoutsWhich = v;
+  $('#l-result').hidden = true;
+  renderLayouts();
+});
+
+/** A layout without its card ids, to tell whether two are the same. */
+function layoutShape(items) { return JSON.stringify(items.map(({ id, ...rest }) => rest)); }
+
+function renderLayouts() {
+  const dev = layoutsDev;
+  if (!dev) return;
+  const which = layoutsWhich;
+  const items = layoutItems(dev, which);
+  $('#l-sub').textContent = dev.name;
+  document.querySelectorAll('#l-which button').forEach((b) => b.classList.toggle('active', b.dataset.which === which));
+  const cards = items.filter((x) => !isSection(x)).length;
+  $('#l-which-hint').textContent = `${which === 'phone' ? 'Phone' : 'Desktop'} layout of ${dev.name}: ${cards} card${cards === 1 ? '' : 's'}`
+    + (which === 'phone' && !dev.layouts.phone ? ', the same as the desktop layout until changed.' : '.')
+    + (which !== layoutMode() ? ` This screen shows the ${layoutMode()} layout.` : '');
+
+  const list = $('#l-list');
+  list.replaceChildren();
+  const current = dev.current[which];
+  const here = layoutShape(items);
+  for (const x of dev.saved) {
+    const li = document.createElement('li');
+    const inUse = x.id === current;
+    const changed = inUse && layoutShape(x.items) !== here;
+    const n = x.items.filter((i) => !isSection(i)).length;
+    li.className = inUse ? 'in-use' : '';
+    li.innerHTML = `<button class="pick" type="button" title="Switch to this layout"><span class="grow"><strong></strong><span class="sub"></span></span></button>
+      <span class="row-actions">
+        ${changed ? '<button type="button" data-a="update" title="Save the changes made since loading it">Save changes</button>' : ''}
+        <button type="button" data-a="more" aria-expanded="false" title="More">⋯</button>
+      </span>
+      <span class="more" hidden>
+        <button type="button" data-a="overwrite">Replace with current</button>
+        <button type="button" data-a="rename">Rename</button>
+        <button type="button" data-a="export">Export</button>
+        <button type="button" data-a="delete" class="danger">Delete</button>
+      </span>`;
+    $('strong', li).textContent = x.name;
+    $('.sub', li).textContent = `${x.mode === 'phone' ? 'Phone' : 'Desktop'} · ${n} card${n === 1 ? '' : 's'}${inUse ? (changed ? ' · in use, changed since' : ' · in use') : ''}`;
+    $('.pick', li).onclick = () => {
+      if (inUse && !changed) return;
+      if (changed && !confirm(`Switch back to "${x.name}" as saved? The changes made since are dropped (Undo in edit mode brings them back).`)) return;
+      applyLayout(dev, which, x.items, x.id);
+      showLayoutResult(`Switched to "${x.name}".`);
+      if (which === layoutMode()) dlgLayouts.close();
+    };
+    const more = $('.more', li);
+    li.querySelector('[data-a="more"]').onclick = (e) => { more.hidden = !more.hidden; e.currentTarget.setAttribute('aria-expanded', String(!more.hidden)); };
+    li.querySelector('[data-a="update"]')?.addEventListener('click', () => { x.items = structuredClone(items); x.savedAt = Date.now(); saveLayout(dev, { track: false }); renderLayouts(); });
+    li.querySelector('[data-a="overwrite"]').onclick = () => {
+      if (!confirm(`Replace "${x.name}" with the ${which} layout you have now?`)) return;
+      x.items = structuredClone(items); x.mode = which; x.savedAt = Date.now();
+      dev.current[which] = x.id;
+      saveLayout(dev, { track: false }); renderLayouts();
+    };
+    li.querySelector('[data-a="rename"]').onclick = () => {
+      const name = prompt('Name', x.name)?.trim();
+      if (!name) return;
+      x.name = name.slice(0, 60);
+      saveLayout(dev, { track: false }); renderLayouts();
+    };
+    li.querySelector('[data-a="export"]').onclick = () => download(
+      exportLayout({ dev, which: x.mode, items: x.items, name: x.name, catalog: conns.get(dev.key)?.catalog }), fileName(dev.name, x.name));
+    li.querySelector('[data-a="delete"]').onclick = () => {
+      if (!confirm(`Delete the saved layout "${x.name}"? The dashboard itself stays as it is.`)) return;
+      dev.saved = dev.saved.filter((y) => y !== x);
+      for (const k of ['desktop', 'phone']) if (dev.current[k] === x.id) dev.current[k] = null;
+      saveLayout(dev, { track: false }); renderLayouts();
+    };
+    list.append(li);
+  }
+  $('#l-empty').hidden = dev.saved.length > 0;
+  $('#l-save button').disabled = dev.saved.length >= MAX_SAVED;
+}
+
+/** Makes `items` one of a PC's layouts (an undoable step when it's the layout on screen). */
+function applyLayout(dev, which, items, savedId = null) {
+  const copy = normalizeItems(structuredClone(items));
+  if (which === layoutMode()) dev.widgets = copy;
+  else if (which === 'phone') dev.layouts.phone = copy;
+  else dev.layouts.desktop = copy;
+  dev.current[which] = savedId;
+  saveLayout(dev, { adopt: false, track: which === layoutMode() });
+  renderPage(dev);
+  conns.get(dev.key)?.subscribe();
+  renderLayouts();
+}
+
+function showLayoutResult(text) {
+  $('#l-result').textContent = text;
+  $('#l-result').hidden = false;
+}
+
+$('#l-save').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const dev = layoutsDev;
+  const name = $('#l-name').value.trim().slice(0, 60);
+  if (!dev || !name || dev.saved.length >= MAX_SAVED) return;
+  const same = dev.saved.find((x) => x.name.toLowerCase() === name.toLowerCase() && x.mode === layoutsWhich);
+  if (same && !confirm(`Replace the saved layout "${same.name}"?`)) return;
+  const entry = same || { id: uid(), name, mode: layoutsWhich };
+  entry.items = structuredClone(layoutItems(dev, layoutsWhich));
+  entry.savedAt = Date.now();
+  if (!same) dev.saved.push(entry);
+  dev.current[layoutsWhich] = entry.id;
+  $('#l-name').value = '';
+  saveLayout(dev, { track: false });
+  updateHeader();
+  renderLayouts();
+});
+
+$('#l-export').onclick = () => {
+  const dev = layoutsDev;
+  if (!dev) return;
+  const savedName = dev.saved.find((x) => x.id === dev.current[layoutsWhich])?.name;
+  download(exportLayout({ dev, which: layoutsWhich, items: layoutItems(dev, layoutsWhich), name: savedName, catalog: conns.get(dev.key)?.catalog }),
+    fileName(dev.name, layoutsWhich));
+};
+
+$('#l-import').onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  const dev = layoutsDev;
+  if (!file || !dev) return;
+  const conn = conns.get(dev.key);
+  try {
+    const data = JSON.parse(await file.text());
+    const got = readLayoutFile(data, { serverId: dev.serverId, which: layoutsWhich });
+    if (!conn?.catalog.length) throw new Error(`Connect to ${dev.name} first, so its sensors can be matched.`);
+    const { items, missing } = remapLayout(normalizeItems(got.items), got.sensors, conn.catalog);
+    const cards = items.filter((x) => !isSection(x)).length;
+    if (!cards && !items.length) throw new Error('That layout is empty.');
+    applyLayout(dev, layoutsWhich, items, null);
+    showLayoutResult(`Imported ${cards} card${cards === 1 ? '' : 's'} from ${got.from}'s ${got.which} layout into the ${layoutsWhich} layout of ${dev.name}.`
+      + (missing.length ? ` ${missing.length} reading${missing.length === 1 ? ' is' : 's are'} not on this PC: ${missing.slice(0, 4).join(', ')}${missing.length > 4 ? '…' : ''}. Those cards show "unavailable" until you pick another sensor in their editor.` : ''));
+  } catch (ex) {
+    showLayoutResult(`Import failed: ${ex instanceof SyntaxError ? 'that file is not a layout file.' : ex.message}`);
+  }
+};
+
+function download(data, name) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- full screen: hides the top bar (and the browser's own bars where it allows)
+let fullRequested = false;
+function setFullscreen(on, { browser = true } = {}) {
+  state.fullscreen = on;
+  persist();
+  document.body.classList.toggle('full', on);
+  $('#btn-full').setAttribute('aria-pressed', String(on));
+  if (on && browser && document.fullscreenEnabled && !document.fullscreenElement) {
+    fullRequested = true;
+    document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => { fullRequested = false; });
+  } else if (!on && document.fullscreenElement && fullRequested) {
+    fullRequested = false;
+    document.exitFullscreen?.().catch(() => {});
+  }
+  if (on) peekExit();
+  requestAnimationFrame(() => $('#pages').scrollTo({ left: active * $('#pages').clientWidth }));
+}
+$('#btn-full').onclick = () => setFullscreen(!state.fullscreen);
+$('#full-exit').onclick = () => setFullscreen(false);
+// Leaving the browser's full screen (Esc, back gesture) leaves ours too.
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && fullRequested) { fullRequested = false; if (state.fullscreen) setFullscreen(false, { browser: false }); }
+});
+
+// The way out shows for a moment after a tap, a click or the mouse moving near the top.
+let exitTimer = 0;
+function peekExit() {
+  if (!state.fullscreen) return;
+  $('#full-exit').hidden = false;
+  clearTimeout(exitTimer);
+  exitTimer = setTimeout(() => { $('#full-exit').hidden = true; }, 2500);
+}
+addEventListener('pointerdown', (e) => { if (state.fullscreen && e.target.closest?.('#pages')) peekExit(); }, { passive: true });
+addEventListener('pointermove', (e) => { if (state.fullscreen && e.pointerType === 'mouse' && e.clientY < 80) peekExit(); }, { passive: true });
+
+/** In full screen the device name isn't shown; a short note names the PC when the page changes. */
+let toastTimer = 0;
+function toast(text) {
+  const t = $('#toast');
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 1600);
+}
+
+// ---------- keyboard: F full screen, Esc leaves it; in edit mode Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo
+addEventListener('keydown', (e) => {
+  if (document.querySelector('dialog[open]') || e.target.matches('input, select, textarea')) return;
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (editing && ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undoRedo(e.shiftKey ? 1 : -1); return; }
+  if (editing && ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); undoRedo(1); return; }
+  if (ctrl || e.altKey) return;
+  if (e.key === 'f' || e.key === 'F') { e.preventDefault(); setFullscreen(!state.fullscreen); }
+  else if (e.key === 'Escape' && state.fullscreen) setFullscreen(false);
+});
+
+// ---------- dashboard updates: reload when the PC that served the page got a newer dashboard
+let webVersion = null;
+let reloadWanted = false;
+async function checkWebVersion() {
+  try {
+    const r = await fetch('version.json', { cache: 'no-store' });
+    const v = r.ok ? (await r.json()).version : null;
+    if (!v) return;
+    if (!webVersion) { webVersion = v; return; }
+    if (v !== webVersion) { reloadWanted = true; reloadWhenIdle(); }
+  } catch { /* offline */ }
+}
+/** Reloads once nothing is being edited (dialogs closed, not in edit mode, nothing waiting to be saved). */
+function reloadWhenIdle() {
+  if (!reloadWanted) return;
+  const busy = editing || document.querySelector('dialog[open]') || state.devices.some((d) => d.layoutDirty);
+  if (busy) { setTimeout(reloadWhenIdle, 5000); return; }
+  location.reload();
+}
+setInterval(checkWebVersion, 15 * 60_000);
+// A dashboard left open for weeks stays signed in: each connection renews its sign-in once a day (see Connection).
+setInterval(() => conns.forEach((c) => { if (c.status === 'online') c.renewToken(); }), 60 * 60_000);
+
 // ---------- start
 // Installable app: service workers only run on HTTPS or localhost; over plain LAN HTTP the page still works.
 if ('serviceWorker' in navigator && window.isSecureContext) {
@@ -1416,9 +2032,19 @@ applyTheme();
 syncWakeLock();
 applyPreview();
 
+if (state.fullscreen) setFullscreen(true, { browser: false });
+
 (async function start() {
+  // The PC that served this page: it keeps the device list and relays to the other PCs.
+  if (location.protocol.startsWith('http')) {
+    try {
+      homeInfo = await probe(location.origin, 5000);
+      homeId = homeInfo.id;
+    } catch { /* opened from elsewhere, or offline (from the app's cache) */ }
+  }
+  checkWebVersion();
   // First visit: add the server that served this page.
-  if (!state.devices.length && location.protocol.startsWith('http')) {
+  if (!state.devices.length && homeId) {
     try { await addDevice(location.origin, { quiet: true }); } catch { /* opened from elsewhere */ }
   }
   renderPages();

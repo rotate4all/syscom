@@ -24,10 +24,23 @@
     <div class="title">
       <span id="status" class="dot" title="Status"></span>
       <h1 id="device-name">SYSCOM</h1>
+      <span id="layout-name" class="layout-name" hidden></span>
     </div>
     <div class="actions">
+      <button id="btn-undo" class="icon edit-only" title="Undo" aria-label="Undo" disabled>
+        <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+      </button>
+      <button id="btn-redo" class="icon edit-only" title="Redo" aria-label="Redo" disabled>
+        <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+      </button>
       <button id="btn-preview" class="icon" title="Phone preview: lay the dashboard out as a phone shows it" aria-pressed="false">
         <svg viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>
+      </button>
+      <button id="btn-layouts" class="icon" title="Layouts: switch, save, export, import" aria-label="Layouts">
+        <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>
+      </button>
+      <button id="btn-full" class="icon" title="Full screen: hide this bar (F)" aria-label="Full screen" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
       </button>
       <button id="btn-edit" class="icon" title="Edit dashboard" aria-pressed="false">
         <svg viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>
@@ -40,6 +53,10 @@
 
   <main id="pages" aria-live="polite"></main>
   <nav id="dots" aria-label="Devices"></nav>
+  <button id="full-exit" class="icon" title="Leave full screen (Esc)" aria-label="Leave full screen" hidden>
+    <svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+  </button>
+  <div id="toast" role="status" hidden></div>
 
   <!-- Add / edit widget -->
   <dialog id="dlg-widget">
@@ -76,14 +93,15 @@
         </label>
       </div>
 
-      <div class="row" id="w-num-field" hidden>
-        <label class="field">Number size
+      <div class="row" id="w-num-field">
+        <label class="field">Value size
           <select id="w-nsize"></select>
         </label>
         <label class="field">Suffix (unit) position
           <select id="w-upos"></select>
         </label>
       </div>
+      <label class="check" id="w-scale-field" hidden><input type="checkbox" id="w-scale-show" checked> Show the min and max values <span class="hint">(hidden, the bar keeps its width and stays centered)</span></label>
 
       <div class="row">
         <label class="field">Width <input id="w-w" type="number" min="1" max="16" step="1" required></label>
@@ -98,6 +116,28 @@
           <button type="button" class="ghost" id="w-thick-reset">Reset</button>
         </div>
         <p class="hint" id="w-thick-hint">Grows and shrinks with the card. 100% is the default; this makes it thinner or thicker than that.</p>
+      </div>
+
+      <div class="row">
+        <label class="field">Card background
+          <select id="w-alpha">
+            <option value="">Dashboard default</option>
+            <option value="100">Solid</option>
+            <option value="85">85% opaque</option>
+            <option value="70">70% opaque</option>
+            <option value="50">50% opaque</option>
+            <option value="30">30% opaque</option>
+            <option value="0">Transparent</option>
+          </select>
+        </label>
+        <label class="field">Corners
+          <select id="w-round">
+            <option value="">Dashboard default</option>
+            <option value="100">Rounded</option>
+            <option value="50">Slightly rounded</option>
+            <option value="0">Square</option>
+          </select>
+        </label>
       </div>
 
       <div class="row">
@@ -197,14 +237,120 @@
       </section>
 
       <section>
-        <h3>Backup</h3>
+        <h3>Layouts and appearance</h3>
         <div class="inline">
-          <button id="btn-export" class="ghost">Export layout</button>
-          <label class="ghost button">Import<input id="import-file" type="file" accept="application/json" hidden></label>
+          <button id="btn-open-layouts" class="ghost">Layouts…</button>
+          <button id="btn-open-look" class="ghost">Appearance…</button>
         </div>
-        <p class="hint">Each PC keeps its own dashboard, so every browser and phone that signs in sees the same layout. The device list and theme are saved in this browser. Passwords and sign-ins are not exported.</p>
+        <p class="hint">For the PC on screen. Each PC keeps its own dashboard (desktop and phone layouts, saved layouts, background), so every browser and phone that signs in sees the same one. Export and import a layout from Layouts; an import works on any PC and matches the readings to its sensors. The device list is kept on the PC this page comes from; sign-ins stay in this browser for 30 days after their last use.</p>
       </section>
     </div>
+  </dialog>
+
+  <!-- Layouts of one PC: saved layouts to switch between, export and import -->
+  <dialog id="dlg-layouts">
+    <div class="sheet">
+      <div class="sheet-head">
+        <div class="h-title">
+          <h2>Layouts</h2>
+          <span class="sub" id="l-sub"></span>
+        </div>
+        <button class="icon" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="segmented" id="l-which" role="group" aria-label="Which layout">
+        <button data-which="desktop">Desktop layout</button>
+        <button data-which="phone">Phone layout</button>
+      </div>
+      <p class="hint" id="l-which-hint"></p>
+
+      <section>
+        <h3>Saved layouts</h3>
+        <ul class="list saved-list" id="l-list"></ul>
+        <p class="hint" id="l-empty">None yet. Save the layout you have now to switch back to it with one tap later.</p>
+        <form class="inline" id="l-save">
+          <input id="l-name" maxlength="60" placeholder="Name, e.g. Gaming" autocomplete="off" required>
+          <button class="primary">Save current</button>
+        </form>
+      </section>
+
+      <section>
+        <h3>Export and import</h3>
+        <div class="inline">
+          <button class="ghost" id="l-export">Export this layout</button>
+          <label class="ghost button">Import into this layout…<input id="l-import" type="file" accept="application/json,.json" hidden></label>
+        </div>
+        <p class="hint">A file from any PC works: each reading is matched to this PC's sensors by its kind and name. Undo (in edit mode) brings the previous layout back.</p>
+        <p class="hint" id="l-result" role="status" hidden></p>
+      </section>
+    </div>
+  </dialog>
+
+  <!-- Dashboard appearance of one PC -->
+  <dialog id="dlg-look">
+    <form method="dialog" class="sheet" id="look-form">
+      <div class="h-title">
+        <h2>Appearance</h2>
+        <span class="sub" id="k-sub"></span>
+      </div>
+
+      <div class="field">
+        <span>Background</span>
+        <div class="segmented" id="k-bg">
+          <button type="button" data-bg="none">Theme</button>
+          <button type="button" data-bg="color">Colour</button>
+          <button type="button" data-bg="image">Picture</button>
+        </div>
+      </div>
+      <div class="row" id="k-color-field">
+        <label class="field">Colour <input type="color" id="k-color"></label>
+      </div>
+      <div id="k-image-field" class="k-image">
+        <div class="inline">
+          <label class="ghost button">Choose a picture…<input type="file" id="k-file" accept="image/*" hidden></label>
+          <span class="hint" id="k-file-name"></span>
+        </div>
+        <div class="row">
+          <label class="field">Fit
+            <select id="k-fit">
+              <option value="cover">Fill the screen</option>
+              <option value="contain">Show it whole</option>
+              <option value="tile">Tile</option>
+            </select>
+          </label>
+        </div>
+        <div class="range thick">
+          <label for="k-dim">Fade <output id="k-dim-out">0%</output></label>
+          <input type="range" id="k-dim" min="0" max="80" step="5" value="0">
+          <p class="hint">Fades the picture toward the theme colour so readings stay easy to read.</p>
+        </div>
+      </div>
+
+      <div class="range thick">
+        <label for="k-alpha">Card background <output id="k-alpha-out">100%</output></label>
+        <input type="range" id="k-alpha" min="0" max="100" step="5" value="100">
+        <p class="hint">100% is solid, 0% shows only the readings over the background. A card can override it in its editor.</p>
+      </div>
+      <div class="range thick">
+        <label for="k-round">Corner rounding <output id="k-round-out">100%</output></label>
+        <input type="range" id="k-round" min="0" max="100" step="5" value="100">
+        <p class="hint">For cards and bars; 0% is square.</p>
+      </div>
+      <div class="field">
+        <span>Animations</span>
+        <div class="segmented" id="k-anim">
+          <button type="button" data-anim="smooth">Smooth</button>
+          <button type="button" data-anim="off">Off</button>
+        </div>
+        <p class="hint">Smooth: gauges, bars and numbers glide to each new reading and graphs scroll steadily, over one polling interval.</p>
+      </div>
+
+      <div class="buttons">
+        <button type="button" class="ghost" id="k-reset">Defaults</button>
+        <span class="grow"></span>
+        <button value="cancel" formnovalidate class="ghost">Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
   </dialog>
 
   <!-- Sensor history -->
@@ -238,6 +384,7 @@
       <p>Sign in to <strong data-name></strong></p>
       <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
       <button class="primary">Sign in</button>
+      <p class="hint">This browser stays signed in for 30 days after its last visit.</p>
       <p class="error" hidden></p>
     </form>
   </template>

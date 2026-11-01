@@ -13,8 +13,14 @@ SYSCOM is meant for a **trusted home or office LAN**.
 - **Read-only monitoring.** Remote users can read sensor values and nothing else. There's no fan control, no
   command execution, no file access.
 - **Sign-in.** Each server has its own password (PBKDF2-SHA256, 210k iterations). Successful logins get an
-  HMAC-SHA256 signed token valid for 30 days. Five failed attempts from one address lock it out (15 s, doubling,
-  up to 5 min). Changing the password invalidates every token.
+  HMAC-SHA256 signed token valid for 30 days; a dashboard in use swaps it for a fresh one once a day, so a browser
+  stays signed in until it has been unused for 30 days. Five failed attempts from one address lock it out (15 s,
+  doubling, up to 5 min). Changing the password invalidates every token.
+- **Relay.** `/relay/{pc}/…` lets an HTTPS dashboard reach the other SYSCOM PCs through the PC that served it. It
+  forwards only SYSCOM's sign-in, readings, history, dashboard and device-list endpoints (never `/api/admin`), only to
+  PCs this one knows or to private-network addresses that answer as SYSCOM servers, passes credentials through
+  untouched and caches nothing. Every target PC still checks its own password, so the relay gives a LAN device no
+  access it couldn't get by connecting to that PC directly.
 - **HTTP and optional HTTPS.** The dashboard answers on HTTP (47810) and HTTPS (47812). Over HTTP, passwords and
   readings cross the LAN unencrypted; the HTTPS address encrypts them once a device trusts the PC's certificate.
   Each PC creates its own certificate authority (ECDSA P-256). Its private key never leaves
@@ -28,6 +34,7 @@ SYSCOM is meant for a **trusted home or office LAN**.
 - **Management API.** `/api/admin/*` (updates, password, restart) only accepts loopback requests carrying the key
   in `%ProgramData%\SYSCOM\admin.key`. That folder is restricted to SYSTEM and Administrators.
 - **Updates.** Every download is checked against its publisher's checksum (see [docs/UPDATES.md](docs/UPDATES.md)),
-  and files are only replaced by the elevated service and updater.
+  and files are only replaced by the elevated service and updater. By default SYSCOM installs new releases of itself
+  from this repository automatically (`AutoUpdate`); set it to `off` in the tray app to review updates first.
 - **Kernel driver.** Low-level sensors need the PawnIO driver. SYSCOM flags PawnIO versions older than
   `MinPawnIoVersion` as a security error and offers the update.
