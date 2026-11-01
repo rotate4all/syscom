@@ -95,7 +95,8 @@ appears depends on your hardware.
 ## Install
 
 1. Download `SYSCOM-<version>-win-x64.zip` from [Releases](https://github.com/rotate4all/syscom/releases) and extract it.
-2. Right-click `install.ps1` and choose **Run with PowerShell**. It asks for administrator rights.
+2. Right-click `install.ps1` and choose **Run with PowerShell**. It asks for administrator rights, and its window
+   stays open at the end (a copy goes to `%ProgramData%\SYSCOM\install.log`).
 3. Open one of the printed addresses (for example `http://192.168.1.20:47810`) on your phone and sign in with the
    printed password. Change it from the SYSCOM tray icon.
 

@@ -133,10 +133,14 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*   # a WebSocket client for the shutdown check
       - name: Run server and probe it
         run: |
           dotnet build src/Syscom.Server -c Release
           dotnet src/Syscom.Server/bin/Release/net10.0/syscom.dll --mock --config "$RUNNER_TEMP/cfg/config.json" &
+          SERVER=$!
           for i in $(seq 1 30); do curl -sf localhost:47810/api/health && break; sleep 1; done
           curl -sf localhost:47810/api/info
           curl -sf localhost:47810/ | grep -q "<title>SYSCOM</title>"
@@ -169,3 +173,16 @@ jobs:
           openssl x509 -inform der -in "$RUNNER_TEMP/ca.der" -out "$RUNNER_TEMP/ca.pem"
           curl -sf --cacert "$RUNNER_TEMP/ca.pem" https://localhost:47812/api/health
           curl -sf localhost:47810/tls/syscom.mobileconfig | grep -q "com.apple.security.root"
+          # Stopping with a dashboard connected must not wait for it: the Windows service would run into its 30 s
+          # shutdown limit and crash. The dashboard is told the server is going away (1001) and reconnects.
+          node -e 'const ws = new WebSocket(process.argv[1]); ws.onopen = () => console.log("dashboard connected"); ws.onclose = (e) => { console.log("closed", e.code); process.exit(e.code === 1001 ? 0 : 1); }; setTimeout(() => process.exit(2), 60000);' \
+            "ws://localhost:47810/ws?token=$TOKEN" &
+          CLIENT=$!
+          sleep 2
+          START=$(date +%s%N)
+          kill -TERM $SERVER
+          while kill -0 $SERVER 2>/dev/null; do sleep 0.1; done
+          MS=$(( ($(date +%s%N) - START) / 1000000 ))
+          echo "server stopped in $MS ms"
+          test $MS -lt 5000
+          wait $CLIENT
