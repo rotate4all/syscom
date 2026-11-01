@@ -53,7 +53,10 @@ function reference() {
   return out.join('\n');
 }
 
-const current = readFileSync(file, 'utf8');
+// Git checks the file out with CRLF line endings on Windows: compare and write in the file's own line endings.
+const raw = readFileSync(file, 'utf8');
+const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+const current = raw.replace(/\r\n/g, '\n');
 const a = current.indexOf(START);
 const b = current.indexOf(END);
 if (a < 0 || b < a) { console.error(`docs/API.md needs the ${START} … ${END} markers.`); process.exit(1); }
@@ -62,6 +65,6 @@ if (process.argv.includes('--check')) {
   if (next !== current) { console.error('docs/API.md is out of date: run  node tools/api-docs.mjs  and commit it.'); process.exit(1); }
   console.log('docs/API.md is up to date.');
 } else if (next !== current) {
-  writeFileSync(file, next);
+  writeFileSync(file, next.replace(/\n/g, eol));
   console.log('docs/API.md updated.');
 } else console.log('docs/API.md was already up to date.');
