@@ -37,6 +37,13 @@ jobs:
       - name: API docs match the in-app reference
         run: node tools/api-docs.mjs --check
 
+      - name: Setup starts the tray app with the rights it needs
+        # The silent install below skips the setup's post-install entries, so this is checked here: the tray app
+        # requires administrator rights, and an entry without runascurrentuser fails with error 740.
+        run: |
+          $bad = Select-String install/syscom.iss -Pattern '^Filename: .*syscom-tray\.exe.*postinstall' | Where-Object { $_.Line -notmatch 'runascurrentuser' }
+          if ($bad) { $bad | ForEach-Object { $_.Line }; throw 'post-install entries that start syscom-tray.exe need the runascurrentuser flag' }
+
   update:
     # In-app update of an installed copy while its tray app runs: a build is updated through the management API to a
     # newer build served from a local feed. Windows doesn't let a running program's files be overwritten, so the

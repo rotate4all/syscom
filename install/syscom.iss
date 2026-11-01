@@ -84,7 +84,9 @@ Name: "{autoprograms}\SYSCOM\SYSCOM"; Filename: "{app}\syscom-tray.exe"; Paramet
 Name: "{autoprograms}\SYSCOM\SYSCOM dashboard"; Filename: "http://localhost:47810/"; IconFilename: "{app}\syscom-tray.exe"
 
 [Run]
-Filename: "{app}\syscom-tray.exe"; Parameters: "--open"; Description: "Open SYSCOM (dashboard address, password, phone setup)"; Flags: postinstall nowait skipifsilent
+; The tray app requires administrator rights (its manifest), and post-install entries run without them unless told
+; otherwise ("runasoriginaluser" is their default), which fails with error 740. Setup is elevated: run it as that.
+Filename: "{app}\syscom-tray.exe"; Parameters: "--open"; Description: "Open SYSCOM (dashboard address, password, phone setup)"; Flags: postinstall nowait skipifsilent runascurrentuser
 Filename: "http://localhost:47810/"; Description: "Open the dashboard in the browser"; Flags: postinstall shellexec nowait skipifsilent unchecked runasoriginaluser
 
 [UninstallRun]
