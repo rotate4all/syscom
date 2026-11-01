@@ -63,6 +63,13 @@ public sealed class DashboardStore
         return new { rev = s.Rev, updated = s.Updated, widgets = s.Widgets, phone = s.Phone, look = s.Look, saved = s.SavedLayouts, current = s.Current };
     }
 
+    /// <summary>The stored layouts as they are: desktop, phone (null = same as desktop) and the saved ones.</summary>
+    public (JsonElement? Desktop, JsonElement? Phone, JsonElement? Saved) Layouts()
+    {
+        var s = Volatile.Read(ref _saved);
+        return (s.Widgets, s.Phone, s.SavedLayouts);
+    }
+
     /// <summary>Saves a new dashboard and returns its revision, or null with a reason when it is not one.</summary>
     public (int? Rev, string? Error) Save(JsonElement body)
     {

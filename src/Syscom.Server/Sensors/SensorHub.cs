@@ -9,7 +9,8 @@ public sealed record Snapshot(long Timestamp, IReadOnlyDictionary<string, float>
 /// <summary>
 /// Polls all sensor sources on one shared loop. The loop runs at the fastest interval any connected client asked
 /// for. With nobody connected it keeps sampling slowly for the history (HistorySampleMs), or goes idle (no hardware
-/// access at all) when history is turned off.
+/// access at all) when history is turned off. API calls keep it reading every second for a minute after the last
+/// one, so a script asking every second gets a fresh reading each time.
 /// </summary>
 public sealed class SensorHub : BackgroundService
 {
@@ -24,6 +25,11 @@ public sealed class SensorHub : BackgroundService
     private volatile Snapshot _latest = new(0, new Dictionary<string, float>());
     private volatile IReadOnlyList<SensorInfo> _catalog = Array.Empty<SensorInfo>();
     private int _catalogVersion;
+    private long _apiUntil;   // Environment.TickCount64 until which API callers want fresh readings
+    private TaskCompletionSource<Snapshot> _nextPoll = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private const int ApiIntervalMs = 1000;
+    private const int ApiHoldMs = 60_000;
 
     public SensorHub(IEnumerable<ISensorSource> sources, ServerConfig cfg, ILogger<SensorHub> log)
     {
@@ -48,6 +54,22 @@ public sealed class SensorHub : BackgroundService
 
     public int ClampInterval(int ms) => Math.Clamp(ms, _cfg.MinIntervalMs, 60_000);
 
+    /// <summary>
+    /// The latest readings for an API call: at most about a second old. When nothing has been reading the sensors that
+    /// often (no dashboard open), waits for a fresh reading, and keeps reading every second for a while.
+    /// </summary>
+    public async Task<Snapshot> FreshAsync(CancellationToken ct)
+    {
+        var wasIdle = Environment.TickCount64 >= Volatile.Read(ref _apiUntil);
+        Volatile.Write(ref _apiUntil, Environment.TickCount64 + ApiHoldMs);
+        var latest = _latest;
+        if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - latest.Timestamp <= ApiIntervalMs + 250) return latest;
+        var next = Volatile.Read(ref _nextPoll).Task;
+        if (wasIdle) _wake.Release();
+        try { return await next.WaitAsync(TimeSpan.FromSeconds(3), ct); }
+        catch (TimeoutException) { return _latest; }
+    }
+
     /// <summary>Registers a client's polling interval; dispose the lease when the client leaves.</summary>
     public Lease Subscribe(int intervalMs)
     {
@@ -61,7 +83,8 @@ public sealed class SensorHub : BackgroundService
     {
         while (!ct.IsCancellationRequested)
         {
-            if (_subscribers.IsEmpty && !_cfg.HistoryEnabled)
+            var api = Environment.TickCount64 < Volatile.Read(ref _apiUntil);
+            if (_subscribers.IsEmpty && !api && !_cfg.HistoryEnabled)
             {
                 try { await _wake.WaitAsync(ct); } catch (OperationCanceledException) { break; }
                 Drain();
@@ -71,6 +94,7 @@ public sealed class SensorHub : BackgroundService
             var interval = _subscribers.IsEmpty
                 ? Math.Max(_cfg.MinIntervalMs, _cfg.HistorySampleMs)
                 : _subscribers.Values.Min();
+            if (api) interval = Math.Min(interval, ClampInterval(ApiIntervalMs));
             var sw = Stopwatch.StartNew();
             Poll();
             var wait = interval - (int)sw.ElapsedMilliseconds;
@@ -123,6 +147,7 @@ public sealed class SensorHub : BackgroundService
         }
         _derived.Update(values);
         _latest = new Snapshot(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), values);
+        Interlocked.Exchange(ref _nextPoll, new TaskCompletionSource<Snapshot>(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult(_latest);
         try { Polled?.Invoke(_latest); }
         catch (Exception ex) { _log.LogWarning(ex, "History could not take a reading"); }
     }

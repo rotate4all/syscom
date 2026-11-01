@@ -189,6 +189,14 @@ export function readingText(sensor, v, unit = sensor?.unit || '') {
   return `${f.n}${f.u ? ' ' + f.u : ''}`;
 }
 
+/** A card may refresh faster or slower than its dashboard: 0.5 s … 60 s. */
+export const WIDGET_INTERVAL_MIN = 500;
+export const WIDGET_INTERVAL_MAX = 60_000;
+export const WIDGET_INTERVALS = [500, 1000, 2000, 3000, 5000, 10000, 30000, 60000];
+
+/** How often a card gets new readings: its own interval, or the dashboard's (`fallback`). */
+export const intervalOf = (w, fallback) => w.interval || fallback;
+
 /** A widget or section from storage, brought up to date (old "size" → columns × rows). */
 export function normalizeItem(x) {
   if (!x || typeof x !== 'object') return null;
@@ -199,6 +207,10 @@ export function normalizeItem(x) {
   w.w = Math.min(MAX_W, Math.round(w.w));
   w.h = Math.min(MAX_H, Math.round(w.h));
   delete w.size;
+  // Its own refresh interval (ms), when it doesn't follow the dashboard's.
+  const iv = Math.round(Number(w.interval));
+  if (iv >= WIDGET_INTERVAL_MIN && iv <= WIDGET_INTERVAL_MAX) w.interval = iv;
+  else delete w.interval;
   const extra = extrasOf(w);
   if (extra.length) w.extra = extra;
   else delete w.extra;

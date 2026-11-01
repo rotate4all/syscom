@@ -119,6 +119,13 @@
       </div>
 
       <div class="row">
+        <label class="field">Refresh
+          <select id="w-interval" aria-describedby="w-interval-hint"></select>
+        </label>
+        <p class="hint field-hint" id="w-interval-hint">How often this card gets new readings. It follows the dashboard's rate unless you pick one; faster rates cost a little more CPU on the PC.</p>
+      </div>
+
+      <div class="row">
         <label class="field">Card background
           <select id="w-alpha">
             <option value="">Dashboard default</option>
@@ -237,6 +244,12 @@
       </section>
 
       <section>
+        <h3>API</h3>
+        <div class="inline"><button id="btn-open-api" class="ghost">API keys and reference…</button></div>
+        <p class="hint">Let scripts and other apps (Home Assistant, Stream Deck, a Python script…) read the sensors and cards of the PC on screen, with a key. In edit mode, the <b>&lt;/&gt;</b> button on a card, a section or the dashboard shows how to read just that.</p>
+      </section>
+
+      <section>
         <h3>Layouts and appearance</h3>
         <div class="inline">
           <button id="btn-open-layouts" class="ghost">Layouts…</button>
@@ -339,9 +352,11 @@
         <span>Animations</span>
         <div class="segmented" id="k-anim">
           <button type="button" data-anim="smooth">Smooth</button>
+          <button type="button" data-anim="auto">Follow system</button>
           <button type="button" data-anim="off">Off</button>
         </div>
-        <p class="hint">Smooth: gauges, bars and numbers glide to each new reading and graphs scroll steadily, over one polling interval.</p>
+        <p class="hint">Smooth: gauges, bars and numbers glide to each new reading and graphs scroll steadily, over one polling interval. Follow system: the same, unless the device asks apps to reduce motion.</p>
+        <p class="hint" id="k-anim-system" hidden>This device asks apps to reduce motion (on Windows: Settings → Accessibility → Visual effects → Animation effects is off), so <b>Follow system</b> shows no animations here.</p>
       </div>
 
       <div class="buttons">
@@ -354,6 +369,25 @@
   </dialog>
 
   <!-- Sensor history -->
+  <!-- API: examples for a card / section / dashboard, the reference, keys (js/apiview.js) -->
+  <dialog id="dlg-api" class="wide">
+    <div class="sheet">
+      <div class="sheet-head">
+        <div class="h-title">
+          <h2 id="api-title">API</h2>
+          <span class="sub" id="api-sub"></span>
+        </div>
+        <button class="icon" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="segmented" id="api-tabs">
+        <button type="button" data-tab="this" id="api-tab-this">This card</button>
+        <button type="button" data-tab="keys">Keys</button>
+        <button type="button" data-tab="ref">Reference</button>
+      </div>
+      <div id="api-body"></div>
+    </div>
+  </dialog>
+
   <dialog id="dlg-history" class="wide">
     <div class="sheet">
       <div class="sheet-head">

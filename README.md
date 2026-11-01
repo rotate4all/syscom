@@ -1,6 +1,7 @@
 # SYSCOM · System Companion
 
 [![CI](https://github.com/rotate4all/syscom/actions/workflows/ci.yml/badge.svg)](https://github.com/rotate4all/syscom/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/rotate4all/syscom)](https://github.com/rotate4all/syscom/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
 SYSCOM turns any phone, tablet or PC browser into a live hardware monitor for the computers on your network.
@@ -9,60 +10,155 @@ loads, clocks, fan speeds, memory, disk and network activity, and FPS. Open it f
 swipe between your machines.
 
 There's no app to install on the phone and no GPU-Z, Afterburner or RivaTuner running in the background. Sensors
-come from a single open-source library, and everything SYSCOM needs ships in one package that updates itself
-component by component.
+come from a single open-source library, everything SYSCOM needs ships in one setup, and each piece updates itself.
+It's light enough to leave running while you game, even with the dashboard refreshing twice a second
+([numbers below](#light-on-your-pc)).
 
 <p align="center">
-  <img src="docs/images/dashboard-mobile-dark.png" width="260" alt="Dashboard on a phone, dark mode">
-  &nbsp;
-  <img src="docs/images/widget-editor.png" width="260" alt="Widget editor with min/med/max thresholds">
-  &nbsp;
-  <img src="docs/images/settings-mobile.png" width="260" alt="Settings: devices, polling interval, theme">
+  <img src="docs/images/dashboard-desktop-dark.png" width="820" alt="A SYSCOM dashboard in a desktop browser, dark theme: gauges in five styles, FPS with native frame rate and frame time, bars, graphs and big numbers, grouped in sections">
 </p>
 <p align="center">
-  <img src="docs/images/dashboard-desktop-light.png" width="820" alt="Dashboard on a desktop browser, light mode">
+  <img src="docs/images/dashboard-mobile-dark.png" width="250" alt="The same PC's phone layout">
+  &nbsp;
+  <img src="docs/images/widget-editor.png" width="250" alt="The card editor on a phone: sensor picker by device and reading type, display, style, value position">
+  &nbsp;
+  <img src="docs/images/dashboard-desktop-light.png" width="300" alt="The dashboard in the light theme">
 </p>
 
 > The screenshots use SYSCOM's built-in mock sensors (`--mock`); on a real PC you see your own hardware names.
 
-## Features
+**Contents:** [Highlights](#highlights) · [The dashboard](#the-dashboard) · [API](#api) ·
+[Light on your PC](#light-on-your-pc) · [What it monitors](#what-it-monitors) · [Install](#install) ·
+[Using it](#using-it) · [Phone app](#install-it-as-a-phone-app) · [Updating](#updating) ·
+[Building](#building-from-source) · [Roadmap](#roadmap)
+
+## Highlights
 
 - **Server-only, any browser as the client.** Each PC runs SYSCOM, and any device on the network opens
   `http://<pc>:47810`. Nothing to install on phones, though you can install the dashboard as an app.
-- **Many PCs, one dashboard.** Add every SYSCOM machine you own and swipe between them. SYSCOM servers find each
-  other on the LAN automatically.
-- **A configurable dashboard per PC, saved on that PC.** Five gauge styles, horizontal and vertical bars, live graphs
-  and big numbers, grouped in sections. Drag cards to reorder them, drag a corner to resize them (the content scales
-  with the card, bar and line thickness included, and can be made thinner or thicker per card), choose where the value
-  sits, put up to 3 sensors on one card (say CPU load with its power draw, each as a number, a small graph or both, on the
-  left, in the center or on the right, in one of five sizes, with your own label and the unit beside, above or below
-  the number or hidden; big numbers such as FPS get the same alignment, size and unit options),
-  rename titles and subtitles, and start from a suggested layout. Every browser and phone that signs
-  in sees the same layouts. Each PC has a desktop layout and a separate phone layout (its own cards, sensors and
-  sections), and the phone preview lets you prepare the phone one from your PC.
-- **Saved layouts, export and import.** Save layouts under a name and switch between them with one click; export a
-  layout to a file and import it on any PC, where its readings are matched to that PC's sensors. Undo and redo the
-  last 5 edits.
-- **Make it yours:** a colour or picture behind the dashboard, see-through cards, square or rounded corners, smooth
-  animations (gauges glide, numbers count, graphs scroll steadily), the unit beside, above or below any reading, bars
-  with or without their min/max labels, and a full-screen mode without the top bar.
-- **30 days of history for every sensor.** Tap any card for a chart of the last 1, 3, 7, 14 or 30 days, with the
-  lowest, average and highest readings.
-- **Min / med / max thresholds** per widget, each with its own colour (for example green, amber, red, or reversed for
-  FPS).
-- **Polling you control:** 1 s by default, down to 500 ms, set per PC. With nobody watching, a server reads its
-  sensors every 2 s for the history (or not at all, with history turned off).
-- **Light, dark or automatic theme.**
-- **Keeps the screen on** while the dashboard is open, on phones and tablets by default (Settings; needs the secure
-  https:// address, see below).
-- **Installable phone app.** Scan a QR code from the tray app; the phone trusts that PC's own certificate once and
-  installs the dashboard as an app over HTTPS. No cloud account, no public domain.
-- **Password sign-in** per PC, with signed tokens and lockout after repeated failures.
-- **Monitoring only.** No fan control, no overclocking, nothing that writes to your hardware.
-- **Updates itself.** Each PC installs new SYSCOM releases from this repository on its own (or every component, or
-  none: your choice), with automatic rollback if an update misbehaves.
-- **A tray app** that shows the health of every component, checks for updates and installs them with one click. Its
-  icon comes in colour, or transparent like modern tray icons.
+- **Many PCs, one dashboard.** Add every SYSCOM machine you own and swipe between them. SYSCOM PCs find each other
+  on the network by themselves.
+- **A dashboard you design**, per PC and saved on that PC, with separate desktop and phone layouts.
+  [Five card types, five gauge styles](#cards), sections, drag and resize, thresholds with colours, and each card
+  refreshing at its own pace.
+- **30 days of history** for every sensor, one tap away.
+- **An API with keys** for scripts, Home Assistant, a Stream Deck or a Raspberry Pi display. Every card, section
+  and dashboard has an **API** button with ready-to-run examples.
+- **A normal Windows setup**, with an Installed apps entry and uninstaller. It updates itself afterwards.
+- **Monitoring only.** No fan control, no overclocking, nothing that writes to your hardware. Nothing is injected
+  into games, so it's safe with anti-cheat.
+
+## The dashboard
+
+### Cards
+
+| Card | What it shows | Options of its own |
+| --- | --- | --- |
+| **Gauge** | the reading on a dial | five styles: *Arc*, *Semicircle*, *Ring*, *Needle* and *Segments*; value at the top, center or bottom; arc thickness |
+| **Bar** | a horizontal bar | value above, beside or inside the bar; min/max labels shown or hidden (the bar then stays centered); bar thickness |
+| **Vertical bar** | a narrow column, good for drives side by side | value above, below, beside or inside; min/max labels; bar thickness |
+| **Graph** | a live line graph | the current value above it, or the graph alone; line thickness |
+| **Value** | a big number, like FPS | left, center or right |
+
+Every card also has:
+
+- **Up to 2 more readings** under the main one (say CPU load with its temperature and power), each as a number, a
+  small graph or both, on the left, in the center or on the right, in one of five sizes, with your own label.
+- **Min / med / max thresholds**, each with its own colour (green, amber, red, or reversed for FPS). The card takes
+  the colour of the highest threshold the reading has reached.
+- **Its own refresh rate**: every 500 ms to every 60 s, or (by default) whatever the dashboard uses. A frame-time
+  graph can update twice a second while drive space updates once a minute.
+- The number in one of five sizes, with its unit beside, above or below it, or hidden; B to TB for sizes, KB/s to
+  GB/s or Mbit/s for data rates; 0 to 2 decimals; a fixed or automatic scale.
+- Title and subtitle (the subtitle names the device unless you change it), transparency and corner rounding.
+- A **live sensor picker**: device tabs (CPU, GPU, Game, Memory, Drives, …), reading types under the active tab,
+  and every sensor's current value in the list, plus search.
+
+<p align="center">
+  <img src="docs/images/edit-mode.png" width="410" alt="Edit mode: each card has move, edit, API and remove buttons; sections have a title, an API button and a drag handle">
+  &nbsp;
+  <img src="docs/images/widget-editor-desktop.png" width="410" alt="The card editor: value size, unit position, size in grid cells, refresh rate, background, corners, title, subtitle and extra readings">
+</p>
+
+### Layout
+
+- **Drag cards** to reorder them (on a touch screen, by their ⠿ handle) and **drag a corner** to resize them. The
+  content scales with the card.
+- **Sections** group cards under a title; drag a section to move it with its cards, tap its title to fold it away.
+- **A suggested layout** to start from: CPU, GPU, FPS with native frame rate and frame time, VRAM, RAM, drives and
+  network, picked from the sensors your PC actually has.
+- **Desktop and phone layouts** per PC, each with its own cards and sections. The phone layout starts as a copy of
+  the desktop one; the phone preview on a PC lets you prepare it at phone width.
+- **Saved layouts**: save the layout on screen under a name (say *Gaming* and *Work*) and switch with one click.
+- **Export and import** one layout to a file. Importing on another PC matches each reading to that PC's sensors.
+- **Undo and redo** the last 5 edits (Ctrl+Z, Ctrl+Y).
+
+### Look
+
+- Light, dark or automatic theme.
+- A colour or a picture behind the dashboard, see-through cards, square or rounded corners (per dashboard, and per
+  card).
+- **Smooth animations**: gauges and bars glide to each new reading, numbers count and graphs scroll steadily, each
+  card at its own refresh rate. *Follow system* turns them off when Windows or the phone asks for less motion,
+  *Off* turns them off.
+- **Full screen** without the top bar, for a tablet or an old phone on the desk. The screen stays on while the
+  dashboard is open (phones and tablets by default).
+
+### History
+
+Tap any card for a chart of the last 1, 3, 7, 14 or 30 days: the average as a line, the lowest to highest reading
+as a band, and exact values when you hover or touch it. Every sensor is kept for 30 days, whether or not it's on a card
+(about 75 MB on disk for 600 sensors).
+
+## API
+
+Everything the dashboard shows can be read by scripts and other apps, with an API key: every sensor with its live
+value, sensors by category (all GPU temperatures, every fan), the history, and the dashboard itself card by card, in
+the same units and colours the cards show. A full-access key can also change the dashboard.
+
+```bash
+curl -H "X-API-Key: syscom_…" "http://192.168.1.20:47810/api/sensors?category=gpu&kind=temperature"
+curl -H "X-API-Key: syscom_…" "http://192.168.1.20:47810/api/dashboard/readings"
+```
+
+You don't need to read the reference first: build what you want in the dashboard, then open the **API** button on a
+card, a section or the whole dashboard. It shows the exact address and ready-to-run examples (curl, PowerShell,
+Python, JavaScript, browser) for that card, filled in with your PC's address and your key, and **Try it** shows the
+answer. The same window creates and revokes keys and holds the full reference.
+
+<p align="center">
+  <img src="docs/images/api-window.png" width="620" alt="The API window for a card: the address, examples in five languages, and Try it with the live answer">
+</p>
+
+The full reference, generated from the same source as the in-app one, is in [docs/API.md](docs/API.md).
+
+## Light on your PC
+
+SYSCOM is built to stay out of the way of the games and work it monitors:
+
+- **Nothing is drawn on the monitored PC.** No window to repaint, no overlay, nothing hooked into games. The
+  dashboard runs on the phone or browser that shows it; the PC only reads sensors and sends small JSON frames.
+- **One reading for everyone.** However many dashboards are open, the PC reads its sensors once per interval (the
+  fastest any card asks for) and sends each dashboard only the sensors its cards show.
+- **Quiet when nobody's watching.** With no dashboard open, it reads every 2 s for the history (or not at all, with
+  history turned off).
+- **One native service.** No browser engine, Electron, Node.js or Python on the PC: a .NET service, plus a small tray
+  app.
+
+<!-- benchmark:start -->
+Measured by CI on a GitHub Actions Windows runner for every change (the numbers are filled in from the latest run of
+`build\benchmark.ps1`; see the *installer* job's summary):
+
+*Numbers pending the first run of the benchmark in CI.*
+<!-- benchmark:end -->
+
+Measure it on your own PC with [build/benchmark.ps1](build/benchmark.ps1) (run as administrator; it changes
+nothing). Add `-Compare` with another monitoring app's process name (`HWiNFO64`, `MSIAfterburner`, …) or the path of
+its .exe to measure it the same way, side by side:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File benchmark.ps1 -Key syscom_… -Compare HWiNFO64
+```
 
 ## What it monitors
 
@@ -79,7 +175,7 @@ component by component.
 
 Frame rate comes from SYSCOM's own counter on Windows' graphics present events (Microsoft-Windows-DXGI and -D3D9,
 the same events PresentMon and FrameView use). Nothing is injected into games, so it's safe with anti-cheat. It
-covers Direct3D 9 to 12, plus Vulkan/OpenGL games whose driver presents through DXGI. The widget shows which app
+covers Direct3D 9 to 12, plus Vulkan/OpenGL games whose driver presents through DXGI. The card shows which app
 it's measuring.
 
 With frame generation, **Frame rate** counts every frame shown, generated ones included, and **Native frame rate**
@@ -94,56 +190,64 @@ appears depends on your hardware.
 
 ## Install
 
-1. Download `SYSCOM-<version>-win-x64.zip` from [Releases](https://github.com/rotate4all/syscom/releases) and extract it.
-2. Right-click `install.ps1` and choose **Run with PowerShell**. It asks for administrator rights, and its window
-   stays open at the end (a copy goes to `%ProgramData%\SYSCOM\install.log`).
-3. Open one of the printed addresses (for example `http://192.168.1.20:47810`) on your phone and sign in with the
-   printed password. Change it from the SYSCOM tray icon.
+1. Download **`SYSCOM-Setup-<version>.exe`** from [the latest release](https://github.com/rotate4all/syscom/releases/latest)
+   and run it.
+2. Windows may show *Windows protected your PC*, because the setup isn't code-signed yet. Click **More info**, then
+   **Run anyway**.
+3. Follow the setup. At the end, the SYSCOM window opens with the dashboard's addresses and the first password.
+   Open one of the addresses (for example `http://192.168.1.20:47810`) on your phone, or scan the QR code that
+   **Set up phone…** shows, and sign in. Change the password from the same window.
 
 If the phone can't open the address (Chrome on Android shows errors such as `ERR_TOO_MANY_RETRIES` or
 `ERR_ADDRESS_UNREACHABLE`), the browser isn't allowed to reach devices on your network yet. On Android, give Chrome
 the **Nearby devices** permission (Settings → Apps → Chrome → Permissions). On iPhone, browsers other than Safari
 need **Local Network** access (Settings → Privacy & Security → Local Network).
 
-The installer puts SYSCOM in `C:\Program Files\SYSCOM`, registers the **SYSCOM** Windows service, opens TCP 47810
-(HTTP), TCP 47812 (HTTPS) and UDP 47811 on private networks only, installs or updates the PawnIO driver if needed, and starts the tray app at
-logon. Start menu → **SYSCOM** opens the tray app's window (starting it again if you closed it), **SYSCOM
-dashboard** the dashboard. Remove it with `uninstall.ps1` in the same folder.
+The setup puts SYSCOM in `C:\Program Files\SYSCOM`, registers the **SYSCOM** Windows service (starts at boot),
+opens TCP 47810 (HTTP), TCP 47812 (HTTPS) and UDP 47811 (discovery) on private networks only, installs or updates
+the PawnIO driver if needed, and starts the tray app at sign-in. Start menu → **SYSCOM** opens the tray app's window,
+**SYSCOM dashboard** the dashboard. Running a newer setup over an installed SYSCOM upgrades it and keeps your
+settings, dashboards and keys. Uninstall it from Settings → Apps → Installed apps; it asks whether to keep your
+settings and history.
 
-**Requirements:** Windows 10/11 x64. Nothing else: the .NET runtime is bundled in the package.
+**Requirements:** Windows 10 (1809 or newer) or Windows 11, x64. Nothing else: the .NET runtime is included.
+
+<details><summary>Unattended install, and the zip with scripts</summary>
+
+`SYSCOM-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES` installs without questions (add `/LOG="setup.log"` for a
+log); `"C:\Program Files\SYSCOM\unins000.exe" /VERYSILENT` removes it and keeps the settings.
+
+Each release also has `SYSCOM-<version>-win-x64.zip` with `install.ps1` and `uninstall.ps1`, which do the same as the
+setup from PowerShell. Windows marks downloaded files, so unblock the zip before extracting it (right-click →
+Properties → **Unblock**, or `Unblock-File`), then right-click `install.ps1` → **Run with PowerShell**.
+</details>
 
 ### Why administrator rights and a driver?
 
 CPU temperatures and motherboard sensors can only be read from kernel mode. LibreHardwareMonitor does that through
-[PawnIO](https://pawnio.eu), a small signed driver. The installer installs the bundled PawnIO version, or updates
-yours if it's older. The tray app warns you if PawnIO is ever missing or older than the minimum safe version
-(older drivers had security issues). GPU, load, memory, disk and network sensors work without it.
+[PawnIO](https://pawnio.eu), a small signed driver. The setup installs the bundled PawnIO version, or updates yours
+if it's older. The tray app warns you if PawnIO is ever missing or older than the minimum safe version (older
+drivers had security issues). GPU, load, memory, disk and network sensors work without it.
 
 ## Using it
 
-- **First visit:** the dashboard is empty. Tap **Suggested layout** to get CPU, GPU, RAM, disk and network
-  widgets, or **Add widget** to pick sensors yourself.
-- **Edit:** tap the pencil to enter edit mode. Drag a card to move it (on a touch screen, drag it by its ⠿ handle),
-  drag its bottom-right corner to resize it, ✎ edits it (sensor, with every sensor's live reading in the list;
-  display, style, value position, size, thickness, title and subtitle, unit (B to TB for sizes, KB/s to GB/s or Mbit/s for
-  data rates), more readings on the card, scale, thresholds) and 🗑 removes it. **+ Add section** adds a titled group; drag a section by its handle to move it with
-  its cards. Outside edit mode, tap a section title to fold it away.
-- **Phone layout:** phones have their own layout. On a PC, the phone button next to the pencil shows and edits it at
-  phone width (4 cells across). It starts as the desktop layout and becomes separate with the first change made
-  there; **↺ Use the desktop layout** in edit mode goes back.
-- **History:** tap a card. The slider picks the last 1, 3, 7, 14 or 30 days (1 day when it opens). The line is the
-  average and the band behind it the lowest to highest reading; hover or touch the chart for exact values.
-- **Thresholds:** each widget has *min*, *med* and *max* values with a colour each. The widget takes the colour of the
-  highest threshold the reading has reached. Leave a value empty to turn it off.
+- **First visit:** the dashboard is empty. Tap **Suggested layout** to get CPU, GPU, FPS, RAM, disk and network
+  cards, or **Add widget** to pick sensors yourself.
+- **Edit:** tap the pencil to enter edit mode. Drag a card to move it, drag its bottom-right corner to resize it,
+  ✎ edits it, `</>` opens its API window and 🗑 removes it. **+ Add section** adds a titled group.
+- **Refresh rate:** Settings → per device, *Every …* (500 ms to 10 s; 1 s by default). A card's own *Refresh* in
+  its editor overrides it for that card.
+- **Phone layout:** on a PC, the phone button next to the pencil shows and edits the phone layout at phone width
+  (4 cells across). It becomes separate from the desktop one with the first change made there; **↺ Use the desktop
+  layout** in edit mode goes back.
+- **History:** tap a card. The slider picks the last 1, 3, 7, 14 or 30 days.
 - **More PCs:** Settings → *Add device*. PCs found on your network are listed, or you can type an address. Swipe
   left or right (or use the arrow keys) to switch.
-- **Polling:** Settings → per device, *Every …* (0.5 s to 10 s; 1 s by default).
-- **Undo / redo:** in edit mode, the arrows next to the pencil (or Ctrl+Z, Ctrl+Y) undo and redo the last 5 edits.
 - **Layouts:** the layers button saves the layout on screen under a name, switches between saved layouts, and
-  exports or imports one layout (desktop or phone) of the PC on screen. An import works on any PC: each reading is
-  matched to that PC's sensors, and the result lists any it couldn't find.
-- **Appearance:** Settings → *Appearance…* (or in edit mode) sets the PC's background (colour or picture), card
-  transparency, corner rounding and animations. Each card can override transparency and corners in its editor.
+  exports or imports one layout (desktop or phone) of the PC on screen.
+- **Appearance:** Settings → *Appearance…* (or in edit mode) sets the background, card transparency, corners and
+  animations.
+- **API keys:** Settings → *API keys and reference…*, or any API window.
 - **Full screen:** the corners button (or F) hides the top bar; tap the screen and use the button in the corner, or
   press Esc, to leave.
 
@@ -185,10 +289,8 @@ component with its installed version, the latest version and its health:
 | .NET runtime | Microsoft's official release feed (patch updates) |
 
 **Update selected** or **Update all** downloads each piece, verifies its publisher's checksum, stops the service,
-swaps the files, restarts and checks health, with the buttons disabled until the result shows. If SYSCOM doesn't
-come back healthy, the previous files are restored automatically. The tray app restarts itself after an update of
-SYSCOM. (Coming from 0.17.0 or older, install 0.17.1 once with `install.ps1`; see
-[docs/UPDATES.md](docs/UPDATES.md#apply-and-roll-back).)
+swaps the files, restarts and checks health. If SYSCOM doesn't come back healthy, the previous files are restored
+automatically. The tray app restarts itself after an update of SYSCOM.
 
 By default each PC also installs new SYSCOM and dashboard releases **by itself**: it checks every 6 hours, and an
 update that restarts SYSCOM waits until no dashboard is open (at most a day). *Install updates automatically* in the
@@ -202,26 +304,32 @@ that bumps the version publishes a release here, which is what the PCs pick up. 
 winget install Microsoft.DotNet.SDK.10
 git clone https://github.com/rotate4all/syscom
 cd syscom
-pwsh build\package.ps1          # → dist\SYSCOM-<ver>-win-x64.zip plus update assets
+pwsh build\package.ps1          # → dist\SYSCOM-Setup-<ver>.exe, dist\SYSCOM-<ver>-win-x64.zip, update assets
 ```
 
+The script fetches the pinned [Inno Setup](https://jrsoftware.org/isinfo.php) compiler by itself for the setup.
 For development you can run the server with fake sensors on any OS (`dotnet run --project src/Syscom.Server -- --mock`)
 and edit `web/` with no build step. See [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Documentation
 
+- [API](docs/API.md): keys, every endpoint with examples, the WebSocket stream
 - [Architecture](docs/ARCHITECTURE.md): how the pieces fit together
-- [API and protocol](docs/API.md): HTTP endpoints and the WebSocket stream
 - [Updates and releases](docs/UPDATES.md): component updates, rollback, feed format, cutting a release
-- [Building](docs/BUILDING.md): dev setup, packaging, project layout
+- [Building](docs/BUILDING.md): dev setup, packaging, the setup, project layout
+- [Changelog](CHANGELOG.md)
 - [Security](SECURITY.md): threat model and how to report a vulnerability
 
 ## Roadmap
 
+- **Linux release**: the server, its dashboard and the API on Linux (LibreHardwareMonitor's Linux support plus the
+  kernel's hwmon sensors), packaged for the common distributions and running as a systemd service.
+- A code-signed setup and a `winget install` package, so Windows stops warning about the download.
 - Frame rate for Vulkan/OpenGL games that don't present through DXGI (graphics kernel events).
-- Per-widget history length and min/max markers on graphs.
+- Per-card history length and min/max markers on graphs.
 
 ## Credits and license
 
 SYSCOM is licensed under the [GNU GPL v3](LICENSE). It builds on LibreHardwareMonitor (MPL-2.0), PawnIO and
-.NET (MIT). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Inspired by PITIKAPP.
+.NET (MIT); the setup is made with [Inno Setup](https://jrsoftware.org/isinfo.php). See
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Inspired by PITIKAPP.

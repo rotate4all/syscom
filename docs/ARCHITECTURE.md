@@ -37,7 +37,10 @@ Windows service, or as a console app for development.
 | `DerivedSensors` | `Sensors/DerivedSensors.cs` | Readings worked out from others: percent used for every "X Used" / "X Total" pair on one device (id = the used reading's id + `/percent`). Gives VRAM % on every GPU vendor; LibreHardwareMonitor's own "GPU Memory" load means VRAM on NVIDIA but memory controller activity on AMD. Windows' "D3D Dedicated Memory Used" (Task Manager's figure) has no total of its own, so it gets a Total (the driver's "GPU Memory Total"), a Free and a percent (`/total`, `/free`, `/percent`). Derived readings are listed right after their source. |
 | `PresentMonitorSource` | `Sensors/PresentMonitorSource.cs` | Frame rate and frame time for any GPU from Windows' present events (real-time ETW session on the DXGI and D3D9 providers, called directly, no dependency). Picks the app drawing the most frames, ignoring the compositor and shell. Native frame rate (without generated frames) from NVIDIA's PC Latency Stats provider (Reflex frame markers, TraceLogging) and the Intel-PresentMon provider's frame types (XeSS-FG rendered presents; AMD AFMF frames, added to the shown rate). Runs while the hub polls (always while history is on). |
 | `MockSensorSource` | `Sensors/MockSensorSource.cs` | Synthetic data for client development (`--mock`, default on non-Windows builds). |
-| `MetricsSession` | `Streaming/MetricsSession.cs` | One WebSocket client. Sends the sensor catalog, then compact value arrays for just the sensors the client's dashboard shows. |
+| `MetricsSession` | `Streaming/MetricsSession.cs` | One WebSocket client. Sends the sensor catalog, then compact value arrays for just the sensors the client's dashboard shows. A dashboard whose cards refresh at different rates subscribes one stream per rate (`streams`); each stream gets its own frames, tagged with its id. |
+| `ApiKeyStore` | `Api/ApiKeyStore.cs` | API keys (`apikeys.json`): name, access (read or full), created and last used. Only a SHA-256 hash of each key is stored; the key itself is shown once, when it's made. |
+| `ApiAccess`, `PublicApi`, `Readings` | `Api/` | Who may call what (a signed-in dashboard, a read key or a full-access key), and the endpoints for scripts: sensors with filters, categories, values, and cards, sections and whole dashboards with their readings in the units the cards show ([API.md](API.md)). A call with no dashboard open asks the hub for a fresh reading, which keeps it polling every second for a minute after the last call. |
+| `InstallEntry` | `Components/InstallEntry.cs` | Keeps the version shown in Windows' Installed apps (the entry the setup made) in step after in-app updates. |
 | `AuthService` | `Auth/AuthService.cs` | PBKDF2-SHA256 password hash, HMAC-SHA256 signed bearer tokens (30 days, renewed daily by open dashboards through `/api/token`), per-IP lockout. Changing the password rotates the signing key, which signs out every browser. |
 | `LanDiscovery` | `Discovery/LanDiscovery.cs` | Broadcasts `{app:"syscom", id, name, port}` every 5 s on UDP 47811 and lists peers it hears. Browsers can't do UDP, so the dashboard asks any connected server for `/api/peers`. |
 | `ComponentManager` | `Components/` | Health, version checks and updates for each component, and automatic installs (`AutoUpdate`; see [UPDATES.md](UPDATES.md)). |
@@ -59,8 +62,10 @@ When the dashboard itself is opened over HTTPS, it talks to every PC on that PC'
 ### Why one polling loop?
 
 Reading hardware (especially SMART and Super I/O) costs far more than serialising a few numbers. With one loop, ten
-browsers watching cost the same hardware reads as one. Each client still gets its own send interval, and the
-values come from the latest snapshot.
+browsers watching cost the same hardware reads as one. Each client still gets its own send interval (one per card
+refresh rate it uses), and the values come from the latest snapshot. The loop runs at the fastest rate anyone asks
+for, so a single card at 500 ms makes the PC read every 500 ms while the other cards' frames still go out at their
+own pace.
 
 ## Web client (`web/`)
 
@@ -152,11 +157,13 @@ C:\Program Files\SYSCOM\
   LibreHardwareMonitorLib.dll and its dependencies
   runtime\        private .NET runtime (NETCore + ASP.NET Core + WindowsDesktop); exes find it via AppHostRelativeDotNet
   web\            dashboard files (version.json inside)
-  drivers\        PawnIO_setup.exe used by the installer
   components.json versions bundled at build time
+  unins000.exe    the setup's uninstaller (installs made with install.ps1 have uninstall.ps1 and drivers\ instead)
 C:\ProgramData\SYSCOM\          (SYSTEM + Administrators only)
   config.json     name, ports, password hash, token secret, update feed URL
   admin.key       shared secret for the tray app
+  apikeys.json    API keys (hashes only)
+  dashboard.json, devices.json, history\   dashboards, the list of PCs, 30-day sensor history
   tls\            ca.pfx / ca.crt (this PC's CA), server.pfx (current HTTPS certificate)
   updates\        staging, backups, updater logs, last-result.json
 ```
@@ -173,4 +180,5 @@ folder, so the updater can drop in a newer LibreHardwareMonitor and its dependen
 | 47812 | TCP | Dashboard, REST API, WebSocket over HTTPS (optional, `HttpsEnabled`) |
 
 All can be changed in `config.json` (`Port`, `DiscoveryPort`, `HttpsPort`) or with
-`install.ps1 -Port … -DiscoveryPort … -HttpsPort …`.
+`install.ps1 -Port … -DiscoveryPort … -HttpsPort …` (the setup uses the defaults, and keeps the ports of an existing
+`config.json`).

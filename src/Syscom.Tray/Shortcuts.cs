@@ -17,8 +17,9 @@ internal static class Shortcuts
         try
         {
             var appDir = AppContext.BaseDirectory;
-            // Only for an installed copy (install.ps1 puts uninstall.ps1 next to it), never for a build folder.
-            if (!File.Exists(Path.Combine(appDir, "uninstall.ps1"))) return;
+            // Only for an installed copy (the setup puts its uninstaller next to it, install.ps1 uninstall.ps1),
+            // never for a build folder.
+            if (!File.Exists(Path.Combine(appDir, "unins000.exe")) && !File.Exists(Path.Combine(appDir, "uninstall.ps1"))) return;
             var exe = Path.Combine(appDir, "syscom-tray.exe");
             Directory.CreateDirectory(Folder);
             var lnk = Path.Combine(Folder, "SYSCOM.lnk");
@@ -29,7 +30,7 @@ internal static class Shortcuts
         }
         catch (Exception)
         {
-            // Nice to have; install.ps1 creates them too.
+            // Nice to have; the setup creates them too.
         }
     }
 

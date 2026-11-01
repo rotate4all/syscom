@@ -67,7 +67,7 @@ jobs:
           $log = Get-Content CHANGELOG.md -Raw
           $m = [regex]::Match($log, "(?ms)^## \[$([regex]::Escape($env:VERSION))\][^\n]*\n(.*?)(?=^## \[|\z)")
           $notes = if ($m.Success) { $m.Groups[1].Value.Trim() } else { 'See CHANGELOG.md.' }
-          $notes += "`n`n---`n**New install:** download ``SYSCOM-$env:VERSION-win-x64.zip``, extract it and run ``install.ps1`` as administrator.`n"
+          $notes += "`n`n---`n**New install:** download ``SYSCOM-Setup-$env:VERSION.exe`` and run it. (Windows may say it protected your PC: the setup isn't code-signed yet; choose **More info** > **Run anyway**.) For scripted installs: ``SYSCOM-$env:VERSION-win-x64.zip`` with ``install.ps1``.`n"
           $notes += "**Installed PCs** update themselves within a few hours (tray app: Install updates automatically), or right away with **Update all** in the tray app."
           Set-Content notes.md $notes -Encoding utf8
           $files = Get-ChildItem dist -File | ForEach-Object FullName

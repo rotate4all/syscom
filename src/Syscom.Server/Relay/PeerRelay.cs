@@ -25,11 +25,18 @@ public static class PeerRelay
 {
     private static readonly HashSet<string> Paths = new(StringComparer.Ordinal)
     {
-        "ws", "api/info", "api/health", "api/login", "api/token", "api/sensors", "api/history", "api/peers",
-        "api/dashboard", "api/dashboard/background", "api/devices",
+        "ws", "api/info", "api/health", "api/login", "api/token", "api/sensors", "api/values", "api/categories",
+        "api/history", "api/peers", "api/dashboard", "api/dashboard/background", "api/dashboard/readings", "api/devices",
+        "api/keys",
     };
 
-    private static readonly string[] RequestHeaders = { "Authorization", "If-None-Match" };
+    /// <summary>Paths with an id at the end: one sensor, card or section, or the key to revoke.</summary>
+    private static readonly string[] PathPrefixes = { "api/sensors/", "api/widgets/", "api/sections/", "api/keys/" };
+
+    private static bool Forwarded(string path) =>
+        Paths.Contains(path) || PathPrefixes.Any(p => path.Length > p.Length && path.StartsWith(p, StringComparison.Ordinal) && !path.Contains(".."));
+
+    private static readonly string[] RequestHeaders = { "Authorization", "X-API-Key", "If-None-Match" };
     private static readonly string[] ResponseHeaders = { "ETag", "Retry-After", "Cache-Control" };
 
     /// <summary>Addresses given as "a.b.c.d-port" that answered as SYSCOM servers, and until when that holds.</summary>
@@ -48,7 +55,7 @@ public static class PeerRelay
         app.Map("/relay/{target}/{**path}", async (HttpContext ctx, string target, string? path) =>
         {
             path ??= "";
-            if (!Paths.Contains(path)) return Results.NotFound();
+            if (!Forwarded(path)) return Results.NotFound();
             if (Resolve(target, discovery, devices, out var known) is not { } upstream)
                 return Results.NotFound(new { message = "Unknown SYSCOM PC." });
             if (!known && !await IsSyscom(http, upstream, ctx.RequestAborted))

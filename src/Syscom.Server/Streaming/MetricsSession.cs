@@ -12,6 +12,10 @@ namespace Syscom.Server.Streaming;
 ///   client → {"type":"subscribe","interval":1000,"sensors":["id",...]}   (omit sensors = all)
 ///   server → {"type":"subscribed","interval":1000,"sensors":["id",...]}
 ///   server → {"type":"data","t":unixMs,"v":[number|null,...]}            (same order as "subscribed")
+///   Several rates on one connection (a card that refreshes faster or slower than the rest of the dashboard):
+///   client → {"type":"subscribe","streams":[{"id":1,"interval":500,"sensors":[...]},{"id":2,"interval":5000}]}
+///   server → {"type":"subscribed","streams":[{"id":1,"interval":500,"sensors":[...]},...]}
+///   server → {"type":"data","s":1,"t":unixMs,"v":[...]}                 (values of stream 1, in its order)
 ///   server → {"type":"layout","rev":n}       the PC's dashboard changed (sent on connect too); GET /api/dashboard
 ///   server → {"type":"devices","rev":n}      the PC's device list changed (sent on connect too); GET /api/devices
 /// </summary>
@@ -25,9 +29,19 @@ public sealed class MetricsSession
     private readonly DeviceListStore _devices;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
-    private volatile string[]? _subscription; // null = everything
+    /// <summary>What the client asked for: one or more sets of sensors, each at its own interval.</summary>
+    /// <param name="Id">Stream id the client chose; null for the single-rate form (its frames carry no "s").</param>
+    /// <param name="Sensors">null = every sensor.</param>
+    private sealed record Stream(int? Id, int Interval, string[]? Sensors);
+
+    private const int MaxStreams = 16;
+    private const int MaxSensors = 1000;
+    private const int MetaCheckMs = 500;   // how often catalog / layout / device list changes are looked for
+
+    private volatile Stream[] _streams = Array.Empty<Stream>();
     private volatile bool _resubscribed;
     private volatile bool _hasSubscribed;
+    private readonly SemaphoreSlim _changed = new(0);
     private int _sentCatalogVersion = -1;
     private int _sentLayoutRev = -1;
     private int _sentDevicesRev = -1;
@@ -113,24 +127,27 @@ public sealed class MetricsSession
             var root = doc.RootElement;
             if (!root.TryGetProperty("type", out var type) || type.GetString() != "subscribe") return;
 
-            if (root.TryGetProperty("interval", out var interval) && interval.TryGetInt32(out var ms))
-                lease.SetInterval(ms);
-
-            if (root.TryGetProperty("sensors", out var sensors) && sensors.ValueKind == JsonValueKind.Array)
+            var streams = new List<Stream>();
+            if (root.TryGetProperty("streams", out var list) && list.ValueKind == JsonValueKind.Array)
             {
-                _subscription = sensors.EnumerateArray()
-                    .Where(e => e.ValueKind == JsonValueKind.String)
-                    .Select(e => e.GetString()!)
-                    .Distinct()
-                    .Take(1000)
-                    .ToArray();
+                foreach (var e in list.EnumerateArray())
+                {
+                    if (e.ValueKind != JsonValueKind.Object || streams.Count == MaxStreams) continue;
+                    var id = e.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.Number && i.TryGetInt32(out var n) ? n : streams.Count;
+                    if (streams.Any(x => x.Id == id)) continue;
+                    streams.Add(new Stream(id, IntervalOf(e, lease.Interval), SensorsOf(e)));
+                }
             }
             else
             {
-                _subscription = null;
+                streams.Add(new Stream(null, IntervalOf(root, lease.Interval), SensorsOf(root)));
             }
+            _streams = streams.ToArray();
+            // The hardware is read as often as the fastest stream needs.
+            if (streams.Count > 0) lease.SetInterval(streams.Min(x => x.Interval));
             _resubscribed = true;
             _hasSubscribed = true;
+            _changed.Release();
         }
         catch (JsonException)
         {
@@ -138,62 +155,108 @@ public sealed class MetricsSession
         }
     }
 
+    private int IntervalOf(JsonElement e, int fallback) =>
+        _hub.ClampInterval(e.TryGetProperty("interval", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var ms) ? ms : fallback);
+
+    private static string[]? SensorsOf(JsonElement e) =>
+        e.TryGetProperty("sensors", out var a) && a.ValueKind == JsonValueKind.Array
+            ? a.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).Distinct().Take(MaxSensors).ToArray()
+            : null;
+
+    /// <summary>
+    /// Sends each stream's readings on its own schedule, and announces catalog, layout and device-list changes.
+    /// Wakes early when the client changes its subscription.
+    /// </summary>
     private async Task SendLoop(SensorHub.Lease lease, CancellationToken ct)
     {
-        var interval = lease.Interval;
-        var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(interval));
-        try
+        var due = new Dictionary<int, long>();   // stream → when it sends next (Environment.TickCount64)
+        Stream[] streams = Array.Empty<Stream>();
+        string[][] ids = Array.Empty<string[]>();
+        long nextMeta = 0;
+        while (!ct.IsCancellationRequested)
         {
-            while (await timer.WaitForNextTickAsync(ct))
+            var now = Environment.TickCount64;
+            if (now >= nextMeta)
             {
                 await SendCatalogIfChanged(ct);
                 await SendLayoutIfChanged(ct);
                 await SendDevicesIfChanged(ct);
-                if (!_hasSubscribed) continue;
+                nextMeta = now + MetaCheckMs;
+            }
 
-                // Clear the flag before reading the subscription so a concurrent change is announced next tick.
-                var announce = _resubscribed;
-                _resubscribed = false;
-                var ids = _subscription ?? _hub.Catalog.Select(s => s.Id).ToArray();
-                if (announce)
+            if (_hasSubscribed)
+            {
+                // Clear the flag before reading the subscription so a concurrent change is announced next round.
+                if (_resubscribed)
                 {
-                    await SendJson(w =>
-                    {
-                        w.WriteString("type", "subscribed");
-                        w.WriteNumber("interval", lease.Interval);
-                        w.WriteStartArray("sensors");
-                        foreach (var id in ids) w.WriteStringValue(id);
-                        w.WriteEndArray();
-                    }, ct);
+                    _resubscribed = false;
+                    streams = _streams;
+                    var all = _hub.Catalog.Select(c => c.Id).ToArray();
+                    ids = streams.Select(x => x.Sensors ?? all).ToArray();
+                    await Announce(streams, ids, ct);
+                    due.Clear();
                 }
 
                 var snap = _hub.Latest;
-                await SendJson(w =>
+                for (var i = 0; i < streams.Length; i++)
                 {
-                    w.WriteString("type", "data");
-                    w.WriteNumber("t", snap.Timestamp);
-                    w.WriteStartArray("v");
-                    foreach (var id in ids)
-                    {
-                        if (snap.Values.TryGetValue(id, out var v)) w.WriteNumberValue(Math.Round(v, 2));
-                        else w.WriteNullValue();
-                    }
-                    w.WriteEndArray();
-                }, ct);
-
-                if (lease.Interval != interval)
-                {
-                    interval = lease.Interval;
-                    timer.Dispose();
-                    timer = new PeriodicTimer(TimeSpan.FromMilliseconds(interval));
+                    var key = streams[i].Id ?? -1;
+                    if (due.TryGetValue(key, out var at) && now < at) continue;
+                    await SendData(streams[i].Id, ids[i], snap, ct);
+                    var next = due.ContainsKey(key) ? at + streams[i].Interval : now + streams[i].Interval;
+                    due[key] = next <= now ? now + streams[i].Interval : next;   // no catching up after a stall
                 }
             }
-        }
-        finally
-        {
-            timer.Dispose();
+
+            var wake = nextMeta;
+            foreach (var at in due.Values) wake = Math.Min(wake, at);
+            var wait = (int)Math.Clamp(wake - Environment.TickCount64, 1, MetaCheckMs);
+            if (await _changed.WaitAsync(wait, ct))
+                while (_changed.CurrentCount > 0 && _changed.Wait(0)) { }
         }
     }
+
+    private Task Announce(Stream[] streams, string[][] ids, CancellationToken ct) => SendJson(w =>
+    {
+        w.WriteString("type", "subscribed");
+        if (streams is [{ Id: null } single])
+        {
+            w.WriteNumber("interval", single.Interval);
+            WriteIds(w, "sensors", ids[0]);
+            return;
+        }
+        w.WriteStartArray("streams");
+        for (var i = 0; i < streams.Length; i++)
+        {
+            w.WriteStartObject();
+            w.WriteNumber("id", streams[i].Id ?? i);
+            w.WriteNumber("interval", streams[i].Interval);
+            WriteIds(w, "sensors", ids[i]);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }, ct);
+
+    private static void WriteIds(Utf8JsonWriter w, string name, string[] ids)
+    {
+        w.WriteStartArray(name);
+        foreach (var id in ids) w.WriteStringValue(id);
+        w.WriteEndArray();
+    }
+
+    private Task SendData(int? stream, string[] ids, Snapshot snap, CancellationToken ct) => SendJson(w =>
+    {
+        w.WriteString("type", "data");
+        if (stream is { } s) w.WriteNumber("s", s);
+        w.WriteNumber("t", snap.Timestamp);
+        w.WriteStartArray("v");
+        foreach (var id in ids)
+        {
+            if (snap.Values.TryGetValue(id, out var v)) w.WriteNumberValue(Math.Round(v, 2));
+            else w.WriteNullValue();
+        }
+        w.WriteEndArray();
+    }, ct);
 
     private async Task SendLayoutIfChanged(CancellationToken ct)
     {
