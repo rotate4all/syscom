@@ -168,7 +168,7 @@ jobs:
             if ($p.ExitCode) { Get-Content $log -Tail 80; throw "$what failed: exit code $($p.ExitCode)" }
           }
           function Wait-Healthy {
-            foreach ($i in 1..60) { try { return Invoke-RestMethod "$base/api/health" } catch { Start-Sleep 1 } }
+            foreach ($i in 1..60) { try { return Invoke-RestMethod "$base/api/health?ready=true" } catch { Start-Sleep 1 } }
             Get-Content $log -Tail 80
             throw 'SYSCOM does not answer after setup'
           }
@@ -179,6 +179,10 @@ jobs:
           $svc = Get-CimInstance Win32_Service -Filter "Name='SYSCOM'"
           "service: $($svc.State), $($svc.StartMode), $($svc.PathName)"
           if ($svc.State -ne 'Running' -or $svc.StartMode -ne 'Auto' -or $svc.PathName -ne "`"$env:ProgramFiles\SYSCOM\syscom.exe`"") { throw 'service not set up right' }
+          $restarts = @(sc.exe qfailure SYSCOM | Select-String 'RESTART').Count
+          $onErrors = [bool](sc.exe qfailureflag SYSCOM | Select-String 'NONCRASH_FAILURES\s*:\s*TRUE')
+          "recovery: $restarts restarts, also when it stops with an error: $onErrors"
+          if ($restarts -lt 3 -or -not $onErrors) { throw 'service recovery not set up right' }
           $task = Get-ScheduledTask -TaskName 'SYSCOM Tray' -ErrorAction SilentlyContinue
           if (-not $task) { throw 'tray task missing' }
           "tray task: $($task.Principal.GroupId), $($task.Principal.RunLevel), on battery: $(-not $task.Settings.DisallowStartIfOnBatteries), $($task.Actions[0].Execute)"
@@ -259,7 +263,7 @@ jobs:
           dotnet build src/Syscom.Server -c Release
           dotnet src/Syscom.Server/bin/Release/net10.0/syscom.dll --mock --config "$RUNNER_TEMP/cfg/config.json" &
           SERVER=$!
-          for i in $(seq 1 30); do curl -sf localhost:47810/api/health && break; sleep 1; done
+          for i in $(seq 1 30); do curl -sf 'localhost:47810/api/health?ready=true' && break; sleep 1; done
           curl -sf localhost:47810/api/info
           curl -sf localhost:47810/ | grep -q "<title>SYSCOM</title>"
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/sensors)" = "401"

@@ -61,7 +61,8 @@ Nothing is installed without the publisher's checksum:
    (unless it needs a newer .NET than the one installed).
 4. The updater stops the **SYSCOM** service (and waits until its process has exited, not only until Windows reports it
    stopped), backs up every file it will overwrite into `backup\`, copies the
-   new files, starts the service and polls `http://127.0.0.1:<port>/api/health` for up to 60 s. If the service
+   new files, starts the service and polls `http://127.0.0.1:<port>/api/health?ready=true` for up to 60 s (it
+   answers once the new version has read the sensors, so a sensor library that hangs is rolled back). If the service
    stops on its own, it fails fast instead of waiting.
    - Files another program has open can't be overwritten on Windows; the running tray app's are. Those are renamed
      to `<name>.syscom-old` and the new file takes their place. The server deletes leftovers when it starts, the
@@ -92,7 +93,7 @@ release built against that LHM version fixes it.
 
 ```json
 {
-  "syscom": "0.18.1",
+  "syscom": "0.18.2",
   "web": "0.18.0",
   "dotnet": { "channel": "10.0", "runtime": "latest" },
   "librehardwaremonitor": "0.9.6",

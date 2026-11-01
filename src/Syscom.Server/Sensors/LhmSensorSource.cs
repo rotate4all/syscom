@@ -16,7 +16,9 @@ public sealed class LhmSensorSource : ISensorSource
     private volatile bool _dirty = true;
     private long _rebuiltAt;
     private bool _gpuPowerChecked;
-    private readonly long _startedAt = Stopwatch.GetTimestamp();
+    private long _startedAt;
+    private bool _opened;
+    private Exception? _openError;
     private List<(ISensor Sensor, string Id)> _sensors = new();
 
     // LibreHardwareMonitor adds some sensors only once it has read them (NVIDIA's "GPU Package" power, PCIe and D3D
@@ -41,7 +43,6 @@ public sealed class LhmSensorSource : ISensorSource
         };
         _computer.HardwareAdded += hw => { Watch(hw); _dirty = true; };
         _computer.HardwareRemoved += hw => { Unwatch(hw); _dirty = true; };
-        _computer.Open();
     }
 
     public string Name => "LibreHardwareMonitor";
@@ -49,6 +50,18 @@ public sealed class LhmSensorSource : ISensorSource
 
     public bool Update(Dictionary<string, float> values)
     {
+        // Finding the hardware (every drive's health data included) can take more than half a minute while Windows
+        // starts, so it happens on the first read, on the sensor loop, not while the service is starting: Windows
+        // gives a service 30 s to report that it started, and doesn't try again if it doesn't.
+        if (!_opened)
+        {
+            _opened = true;
+            try { _computer.Open(); }
+            catch (Exception ex) { _openError = ex; }
+            _startedAt = Stopwatch.GetTimestamp();
+        }
+        if (_openError is not null) throw new InvalidOperationException(_openError.Message, _openError);
+
         foreach (var hw in _computer.Hardware) UpdateRecursive(hw);
 
         var changed = false;
@@ -132,6 +145,9 @@ public sealed class LhmSensorSource : ISensorSource
         foreach (var sub in hw.SubHardware) Collect(sub, sensors, catalog);
     }
 
-    public void Dispose() => _computer.Close();
+    public void Dispose()
+    {
+        if (_opened) _computer.Close();
+    }
 }
 #endif

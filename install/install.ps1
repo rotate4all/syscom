@@ -111,8 +111,9 @@ if (-not (Get-Service $service -ErrorAction SilentlyContinue)) {
 } else {
     & sc.exe config $service binPath= "`"$exe`"" start= auto | Out-Null
 }
-# Restart automatically if it ever crashes.
+# Restart automatically if it ever crashes, or stops with an error.
 & sc.exe failure $service reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+& sc.exe failureflag $service 1 | Out-Null
 
 # Ports live in %ProgramData%\SYSCOM\config.json (created on first start with defaults).
 $configFile = Join-Path $env:ProgramData 'SYSCOM\config.json'

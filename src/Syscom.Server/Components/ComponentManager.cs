@@ -265,7 +265,8 @@ public sealed class ComponentManager : BackgroundService
             ServerPid: asService ? null : Environment.ProcessId,
             ServerExe: exe,
             ServerArgs: asService ? Array.Empty<string>() : serverArgs,
-            HealthUrl: $"http://127.0.0.1:{_cfg.Port}/api/health",
+            // Healthy once the sensors are read, so an update whose sensor library hangs is rolled back.
+            HealthUrl: $"http://127.0.0.1:{_cfg.Port}/api/health?ready=true",
             BackupDir: Path.Combine(runDir, "backup"),
             ResultPath: SyscomPaths.LastUpdateResult,
             Steps: steps);

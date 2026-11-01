@@ -8,6 +8,32 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.18.2] - 2026-11-01
+
+### Fixed
+- **The tray icon didn't appear after Windows restarted**, although the tray app was running. It starts as you sign
+  in, often a few seconds before Windows has made the taskbar, and an icon added before then is lost. Apps add their
+  icon again when Explorer announces the new taskbar, but Windows doesn't pass that announcement on to an app running
+  as administrator, which the tray app is. It now lets it through, and also adds its icon again when it sees a new
+  taskbar on its next refresh (this also covers Explorer restarting).
+- **The SYSCOM service didn't start with Windows on some PCs**, and the tray app said SYSCOM is not running. The
+  service read all the hardware, every drive's health data included, before telling Windows it had started. While
+  Windows starts (with backup software starting too, say), that can take longer than Windows waits for a service
+  (30 s, on some PCs 45 s), and then Windows gives up and doesn't try again: events 7009 and 7000 in the System log.
+  SYSCOM now tells Windows at once and finds the hardware afterwards; the dashboard answers meanwhile and gets the
+  sensors as soon as they're found. The Windows event log (Application) says how long that took: "Found … sensors
+  in … s". It also no longer resets the permissions of every file in its data folder at every start (thousands of
+  files with the update backups), only when the folder isn't locked down yet.
+- When the tray app starts (as you sign in) and the service is stopped, it starts it, unless the service was set to
+  start manually or disabled. **Restart server** in the tray menu starts a stopped service too.
+- Windows now restarts SYSCOM also when it stops with an error, not only when it crashes, and SYSCOM reports a stop
+  caused by a failing part as an error. The setup (and `install.ps1`) sets this up; in-app updates don't change
+  service settings, so run the 0.18.2 setup once to get it.
+
+### Changed
+- An in-app update counts as successful once the new version has read the sensors (`/api/health?ready=true`), as
+  before, when SYSCOM read them before answering at all. A new sensor library that hangs is still rolled back.
+
 ## [0.18.1] - 2026-11-01
 
 ### Fixed
