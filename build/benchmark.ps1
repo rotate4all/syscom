@@ -10,6 +10,8 @@
 
   It needs an API key (create a read key in the dashboard: Settings > API keys), or the password.
 
+  A warm-up (-WarmUp, 30 s) runs first, so the numbers show SYSCOM's steady state rather than its start-up.
+
   -Compare measures other monitoring apps the same way, for a side-by-side table: give a process name for an app
   that's already running (HWiNFO64, MSIAfterburner, RTSSHooksLoader64 ...), or the path of an .exe, which the
   script starts for the measurement and closes afterwards. Those apps are measured after SYSCOM's phases, with no
@@ -28,6 +30,7 @@ param(
     [string]$Password,
     [int]$Port = 47810,
     [int]$Seconds = 60,
+    [int]$WarmUp = 30,
     [string[]]$Compare = @(),
     [switch]$Markdown
 )
@@ -51,7 +54,7 @@ function Get-Server {
     $p
 }
 
-function Measure-Phase([string]$name, [int]$interval) {
+function Measure-Phase([string]$name, [int]$interval, [int]$duration = $Seconds) {
     $ws = $null
     $frames = 0; $bytes = 0
     $none = [Threading.CancellationToken]::None
@@ -76,7 +79,7 @@ function Measure-Phase([string]$name, [int]$interval) {
     $t0 = [Diagnostics.Stopwatch]::StartNew()
     $ws0 = @(); $priv = @()
     $nextSample = 0
-    while ($t0.Elapsed.TotalSeconds -lt $Seconds) {
+    while ($t0.Elapsed.TotalSeconds -lt $duration) {
         if ($ws) {
             if (-not $pending) { $pending = $ws.ReceiveAsync([ArraySegment[byte]]::new($buffer), $none) }
             if ($pending.Wait(100)) {
@@ -145,6 +148,12 @@ function Measure-App([string]$app) {
 $cpuName = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()
 $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
 Write-Host "SYSCOM $($info.version) on $cpuName ($([Environment]::ProcessorCount) logical cores, $ram GB), $sensors sensors, $Seconds s per phase"
+# A freshly started SYSCOM is still compiling its hot paths and filling caches; let that settle first, or the first
+# phase measures start-up rather than the steady state.
+if ($WarmUp -gt 0) {
+    Write-Host "Warming up for $WarmUp s (a dashboard at 1 s)..."
+    Measure-Phase 'warm-up' 1000 $WarmUp | Out-Null
+}
 Write-Host 'Measuring: idle (no dashboard open)...'
 $rows = @(Measure-Phase 'Idle (no dashboard open, history every 2 s)' 0)
 Write-Host 'Measuring: dashboard at 1 s...'

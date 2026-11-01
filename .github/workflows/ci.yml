@@ -209,7 +209,7 @@ jobs:
               if ($exe) { $compare = @($exe.FullName); "comparing with LibreHardwareMonitor $($rel.tag_name) ($($a.name))"; break }
             }
           } catch { Write-Warning "LibreHardwareMonitor is not available for the comparison: $_" }
-          ./build/benchmark.ps1 -Password $pw -Seconds 30 -Compare $compare -Markdown | Tee-Object -Variable bench
+          ./build/benchmark.ps1 -Password $pw -Seconds 60 -Compare $compare -Markdown | Tee-Object -Variable bench
           @('## SYSCOM resource use on the CI runner', '') + $bench | Add-Content $env:GITHUB_STEP_SUMMARY
 
           Install 'Upgrade over the installed copy'
