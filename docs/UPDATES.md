@@ -74,9 +74,13 @@ Nothing is installed without the publisher's checksum:
    then, shows it. The 5 newest update folders are kept.
 
 **Updating from 0.17.0 or older:** those versions' updater can't swap the tray app's files, so their in-app update
-of SYSCOM rolls back while the tray app runs (the web dashboard updates fine). Install 0.17.1 once with the full
-package: download `SYSCOM-0.17.1-win-x64.zip`, extract it and run `install.ps1` as administrator. Password,
-settings and dashboards stay. Later versions update from the tray app or by themselves.
+of SYSCOM rolls back while the tray app runs (the web dashboard updates fine). Run the latest
+`SYSCOM-Setup-<version>.exe` once over it (or the zip's `install.ps1`, 0.17.1 or newer). Password, settings and
+dashboards stay. Later versions update from the tray app or by themselves.
+
+**Installed with the setup or with install.ps1:** both install to the same place in the same way, so in-app updates
+work the same. Over a copy installed with the setup, SYSCOM keeps the version shown in Settings → Apps → Installed
+apps in step after each update; running a newer setup over either kind of install upgrades it in place.
 
 Updating LibreHardwareMonitor in place works because the install has no `deps.json` pinning. If a new LHM version
 breaks API compatibility with the SYSCOM build, the health check fails and the update rolls back. A new SYSCOM
@@ -88,19 +92,21 @@ release built against that LHM version fixes it.
 
 ```json
 {
-  "syscom": "0.17.2",
-  "web": "0.17.0",
+  "syscom": "0.18.0",
+  "web": "0.18.0",
   "dotnet": { "channel": "10.0", "runtime": "latest" },
   "librehardwaremonitor": "0.9.6",
   "pawnio": "latest",
-  "windowsServices": "10.0.14"
+  "windowsServices": "10.0.14",
+  "innosetup": "7.1.1"
 }
 ```
 
 Bump a value and run `pwsh build\package.ps1`. The script builds SYSCOM against the pinned LHM version, downloads
 and verifies the runtime and PawnIO, and writes to `dist\`:
 
-- `SYSCOM-<ver>-win-x64.zip`: the full package (extract, then run `install.ps1`)
+- `SYSCOM-Setup-<ver>.exe`: the setup (what most people download; built with the pinned Inno Setup)
+- `SYSCOM-<ver>-win-x64.zip`: the same files with the scripted install (extract, then run `install.ps1`)
 - `syscom-app-<ver>.zip`, `syscom-web-<webver>.zip`: update assets
 - `feed.json`: the feed installed copies read
 

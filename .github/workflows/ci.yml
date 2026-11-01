@@ -34,6 +34,9 @@ jobs:
         shell: pwsh
         run: Get-ChildItem web/js/*.js | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit 1 } }
 
+      - name: API docs match the in-app reference
+        run: node tools/api-docs.mjs --check
+
   update:
     # In-app update of an installed copy while its tray app runs: a build is updated through the management API to a
     # newer build served from a local feed. Windows doesn't let a running program's files be overwritten, so the
@@ -125,6 +128,114 @@ jobs:
           }
           exit $bad
 
+  installer:
+    # Builds SYSCOM-Setup.exe the way a release does, installs it silently, checks the service, firewall, tray task,
+    # Start menu, Installed apps entry and the API, upgrades over itself, then uninstalls and checks nothing is left.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build the package and the installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./build/package.ps1
+
+      - name: Install, upgrade, uninstall
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (Get-ChildItem dist -Filter 'SYSCOM-Setup-*.exe').FullName
+          "setup: $(Split-Path $setup -Leaf), $([math]::Round((Get-Item $setup).Length / 1MB, 1)) MB"
+          $log = Join-Path $env:RUNNER_TEMP 'setup.log'
+          $base = 'http://127.0.0.1:47810'
+          function Install([string]$what) {
+            $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"" -Wait -PassThru
+            if ($p.ExitCode) { Get-Content $log -Tail 80; throw "$what failed: exit code $($p.ExitCode)" }
+          }
+          function Wait-Healthy {
+            foreach ($i in 1..60) { try { return Invoke-RestMethod "$base/api/health" } catch { Start-Sleep 1 } }
+            Get-Content $log -Tail 80
+            throw 'SYSCOM does not answer after setup'
+          }
+
+          Install 'Setup'
+          "health: $(Wait-Healthy | ConvertTo-Json -Compress)"
+          Get-Content $log | Select-String ' -> ' | ForEach-Object { "  $($_.Line.Substring([Math]::Min(24, $_.Line.Length)))" }
+          $svc = Get-CimInstance Win32_Service -Filter "Name='SYSCOM'"
+          "service: $($svc.State), $($svc.StartMode), $($svc.PathName)"
+          if ($svc.State -ne 'Running' -or $svc.StartMode -ne 'Auto' -or $svc.PathName -ne "`"$env:ProgramFiles\SYSCOM\syscom.exe`"") { throw 'service not set up right' }
+          $task = Get-ScheduledTask -TaskName 'SYSCOM Tray' -ErrorAction SilentlyContinue
+          if (-not $task) { throw 'tray task missing' }
+          "tray task: $($task.Principal.GroupId), $($task.Principal.RunLevel), on battery: $(-not $task.Settings.DisallowStartIfOnBatteries), $($task.Actions[0].Execute)"
+          if ($task.Principal.RunLevel -ne 'Highest' -or $task.Settings.DisallowStartIfOnBatteries) { throw 'tray task settings' }
+          $rules = @(Get-NetFirewallRule -DisplayName 'SYSCOM*' | ForEach-Object DisplayName)
+          "firewall: $($rules -join ', ')"
+          if ($rules -notcontains 'SYSCOM dashboard' -or $rules -notcontains 'SYSCOM discovery') { throw 'firewall rules missing' }
+          $menu = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'SYSCOM'
+          "start menu: $((Get-ChildItem $menu).Name -join ', ')"
+          if (-not (Test-Path "$menu\SYSCOM.lnk") -or -not (Test-Path "$menu\SYSCOM dashboard.url")) { throw 'Start menu entries missing' }
+          $entry = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{6B0E9B0C-5E1F-4C1D-9D57-6A3C2F1E8B47}_is1'
+          "installed apps: $($entry.DisplayName) $($entry.DisplayVersion) by $($entry.Publisher)"
+          $pawn = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO' -ErrorAction SilentlyContinue
+          "PawnIO: $(if ($pawn) { $pawn.DisplayVersion } else { 'not installed' })"
+
+          # The API on the installed copy: sign in with the first password, make a read key, read with it.
+          $pw = (Get-Content "$env:ProgramData\SYSCOM\initial-password.txt" -Raw).Trim()
+          $token = (Invoke-RestMethod "$base/api/login" -Method Post -ContentType 'application/json' -Body (@{ password = $pw } | ConvertTo-Json)).token
+          $key = (Invoke-RestMethod "$base/api/keys" -Method Post -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body '{"name":"ci","access":"read"}').secret
+          $cats = Invoke-RestMethod "$base/api/categories" -Headers @{ 'X-API-Key' = $key }
+          "sensors by category: $(($cats | ForEach-Object { "$($_.id) $($_.count)" }) -join ', ')"
+
+          # How light it is: CPU and memory idle, and with a dashboard streaming every sensor at 1 s and 500 ms. For
+          # comparison, LibreHardwareMonitor's own app (the same sensor library, with its window), latest release.
+          $compare = @()
+          try {
+            $rel = Invoke-RestMethod 'https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest' -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'SYSCOM-ci' }
+            foreach ($a in @($rel.assets | Where-Object name -like '*.zip' | Sort-Object { $_.name -match 'net4|framework' })) {
+              $zip = Join-Path $env:RUNNER_TEMP $a.name
+              Invoke-WebRequest $a.browser_download_url -OutFile $zip -UseBasicParsing
+              if ($a.digest -like 'sha256:*' -and (Get-FileHash $zip).Hash -ne $a.digest.Substring(7).ToUpperInvariant()) { throw "checksum mismatch: $($a.name)" }
+              $dir = Join-Path $env:RUNNER_TEMP ('lhm-' + [IO.Path]::GetFileNameWithoutExtension($a.name))
+              Expand-Archive $zip $dir -Force
+              $exe = Get-ChildItem $dir -Recurse -Filter LibreHardwareMonitor.exe | Select-Object -First 1
+              if ($exe) { $compare = @($exe.FullName); "comparing with LibreHardwareMonitor $($rel.tag_name) ($($a.name))"; break }
+            }
+          } catch { Write-Warning "LibreHardwareMonitor is not available for the comparison: $_" }
+          ./build/benchmark.ps1 -Password $pw -Seconds 60 -Compare $compare -Markdown | Tee-Object -Variable bench
+          @('## SYSCOM resource use on the CI runner', '') + $bench | Add-Content $env:GITHUB_STEP_SUMMARY
+
+          Install 'Upgrade over the installed copy'
+          Wait-Healthy | Out-Null
+          Invoke-RestMethod "$base/api/categories" -Headers @{ 'X-API-Key' = $key } | Out-Null   # keys and settings survive
+          'upgrade: OK'
+
+          $p = Start-Process "$env:ProgramFiles\SYSCOM\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode) { throw "uninstall failed: exit code $($p.ExitCode)" }
+          foreach ($i in 1..30) { if (-not (Test-Path "$env:ProgramFiles\SYSCOM")) { break }; Start-Sleep 1 }
+          if (Get-Service SYSCOM -ErrorAction SilentlyContinue) { throw 'the service is still there' }
+          if (Get-ScheduledTask -TaskName 'SYSCOM Tray' -ErrorAction SilentlyContinue) { throw 'the tray task is still there' }
+          if (Get-NetFirewallRule -DisplayName 'SYSCOM*' -ErrorAction SilentlyContinue) { throw 'firewall rules are still there' }
+          if (Test-Path "$env:ProgramFiles\SYSCOM") { Get-ChildItem "$env:ProgramFiles\SYSCOM" -Recurse | Select-Object -First 20 FullName; throw 'the install folder is still there' }
+          if (Test-Path $menu) { throw 'the Start menu folder is still there' }
+          if (-not (Test-Path "$env:ProgramData\SYSCOM\config.json")) { throw 'a silent uninstall should keep the settings' }
+          'Setup, upgrade and uninstall: OK'
+
+      - name: Keep the setup log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: setup-log
+          path: ${{ runner.temp }}/setup.log
+          if-no-files-found: ignore
+
   smoke:
     # Starts the server with mock sensors on Linux and checks the public endpoints.
     runs-on: ubuntu-latest
@@ -168,6 +279,37 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/relay/0123456789abcdef/api/admin/status)" = "404"
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/relay/127.0.0.1-47810/api/info)" = "404"
           curl -sf localhost:47810/trust | grep -q "Install SYSCOM as an app"
+          # API keys: a read key reads sensors and cards but can't change anything; a revoked key stops at once
+          KEY=$(curl -sf localhost:47810/api/keys -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"name":"ci","access":"read"}')
+          SECRET=$(echo "$KEY" | jq -r .secret); KID=$(echo "$KEY" | jq -r .key.id)
+          curl -sf 'localhost:47810/api/sensors?category=cpu&kind=load' -H "X-API-Key: $SECRET" | jq -e 'length >= 1 and .[0].value != null'
+          curl -sf localhost:47810/api/widgets/w1 -H "X-API-Key: $SECRET" | jq -e '.widget.sensor.id == "/mock/cpu/load/0" and .widget.unit == "%" and .widget.value != null'
+          curl -sf localhost:47810/api/sections/s1 -H "X-API-Key: $SECRET" | jq -e '.section.title == "CPU" and (.section.widgets | length) == 1'
+          curl -sf localhost:47810/api/dashboard/readings -H "X-API-Key: $SECRET" | jq -e '(.sections | length) == 1'
+          curl -sf 'localhost:47810/api/values?ids=/mock/cpu/load/0' -H "authorization: Bearer $SECRET" | jq -e '.values["/mock/cpu/load/0"] != null'
+          curl -sf "localhost:47810/api/sensors/mock/cpu/load/0?key=$SECRET" | jq -e '.name == "CPU Total"'
+          curl -sf localhost:47810/api/categories -H "X-API-Key: $SECRET" | jq -e 'map(.id) | index("cpu") != null'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PUT localhost:47810/api/dashboard -H "X-API-Key: $SECRET" -H 'content-type: application/json' -d '{"widgets":[]}')" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/keys -H "X-API-Key: $SECRET")" = "401"
+          # A full-access key can change what the dashboard can: the layout, the background picture, the list of PCs
+          FULL=$(curl -sf localhost:47810/api/keys -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"name":"ci full","access":"full"}' | jq -r .secret)
+          curl -sf localhost:47810/api/dashboard -H "X-API-Key: $FULL" | jq -c '{widgets, phone, look, saved, current}' > "$RUNNER_TEMP/dash.json"
+          curl -sf -X PUT localhost:47810/api/dashboard -H "X-API-Key: $FULL" -H 'content-type: application/json' --data-binary @"$RUNNER_TEMP/dash.json" | jq -e '.rev == 2'
+          curl -sf -X PUT localhost:47810/api/dashboard/background -H "X-API-Key: $FULL" -H 'content-type: image/png' --data-binary @web/icons/icon-192.png | jq -e '(.id | length) == 16'
+          curl -sf -X DELETE localhost:47810/api/dashboard/background -H "X-API-Key: $FULL" > /dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/dashboard/background -H "X-API-Key: $SECRET")" = "404"
+          curl -sf -X PUT localhost:47810/api/devices -H "X-API-Key: $FULL" -H 'content-type: application/json' -d '{"devices":[]}' | jq -e '.rev == 2'
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/keys -H "X-API-Key: $FULL")" = "401"
+          curl -sf -X DELETE "localhost:47810/api/keys/$KID" -H "authorization: Bearer $TOKEN" > /dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/values -H "X-API-Key: $SECRET")" = "401"
+          # Several refresh rates on one WebSocket (cards with their own polling interval)
+          node -e '
+            const ws = new WebSocket(process.argv[1]); const n = {};
+            ws.onopen = () => ws.send(JSON.stringify({ type: "subscribe", interval: 1000, streams: [
+              { id: 500, interval: 500, sensors: ["/mock/cpu/load/0"] }, { id: 2000, interval: 2000, sensors: ["/mock/gpu/load/0"] }] }));
+            ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.type === "data") n[m.s] = (n[m.s] || 0) + 1; };
+            setTimeout(() => { console.log("frames in 4 s", JSON.stringify(n)); process.exit(n[500] >= 6 && n[500] <= 10 && n[2000] >= 1 && n[2000] <= 3 ? 0 : 1); }, 4000);' \
+            "ws://localhost:47810/ws?token=$TOKEN"
           # HTTPS with the server's own CA (name-constrained to local names and private addresses)
           curl -sf localhost:47810/tls/syscom-ca.crt -o "$RUNNER_TEMP/ca.der"
           openssl x509 -inform der -in "$RUNNER_TEMP/ca.der" -out "$RUNNER_TEMP/ca.pem"

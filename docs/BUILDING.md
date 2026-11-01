@@ -19,8 +19,17 @@ src/
   Syscom.Updater/         syscom-updater.exe: applies updates with backup and rollback
   Syscom.Tray/            syscom-tray.exe: WinForms tray app (management GUI)
 web/                      dashboard (plain HTML/CSS/JS, no build step)
-build/package.ps1         full package + update assets + feed.json
-install/                  install.ps1, uninstall.ps1, README.txt (copied into the package)
+  js/api-reference.js     the API reference: source of the in-app API window and of docs/API.md
+build/
+  package.ps1             setup + full package + update assets + feed.json
+  get-innosetup.ps1       finds or installs the pinned Inno Setup compiler (ISCC.exe)
+  benchmark.ps1           CPU and memory of an installed SYSCOM, idle and with a dashboard at 1 s and 500 ms
+install/
+  syscom.iss              the setup (Inno Setup script)
+  install.ps1, uninstall.ps1, README.txt   the scripted install (copied into the zip package)
+tools/
+  api-docs.mjs            regenerates the reference part of docs/API.md (CI checks it's up to date)
+  trace-frames.ps1, analyze-frame-trace.py   frame rate diagnostics
 docs/                     documentation
 ```
 
@@ -88,12 +97,50 @@ flips that reach the screen. With frame generation working, presented is a multi
 pwsh build\package.ps1
 ```
 
-Produces `dist\SYSCOM-<ver>-win-x64.zip` (full package) plus `syscom-app-*.zip`, `syscom-web-*.zip` and
-`feed.json` (update assets). See [UPDATES.md](UPDATES.md#building-a-package). `-SkipDownloads` reuses the runtime
-and PawnIO from `dist\cache`.
+Produces `dist\SYSCOM-Setup-<ver>.exe` (the setup), `dist\SYSCOM-<ver>-win-x64.zip` (the same files with
+`install.ps1`) plus `syscom-app-*.zip`, `syscom-web-*.zip` and `feed.json` (update assets). See
+[UPDATES.md](UPDATES.md#building-a-package). `-SkipDownloads` reuses the runtime and PawnIO from `dist\cache`;
+`-NoInstaller` skips the setup.
+
+The setup is compiled with [Inno Setup](https://jrsoftware.org/isinfo.php), pinned in `versions.json`
+(`"innosetup"`). `build\get-innosetup.ps1` uses an installed copy of exactly that version, or downloads the official
+installer from Inno Setup's GitHub releases, checks its SHA-256 and installs it for the current user into
+`dist\cache`. The Dependencies workflow flags newer Inno Setup releases. To build the setup by hand from a staged
+package folder:
+
+```powershell
+ISCC.exe /DAppVersion=0.18.0 /DPackageDir=dist\SYSCOM-0.18.0 /Odist install\syscom.iss
+```
+
+The setup does what `install.ps1` does, as a normal wizard: Program Files, the service, firewall rules on private
+networks, PawnIO when the bundled one is newer, the tray app at sign-in, Start menu entries and an Installed apps
+entry with an uninstaller. Silent: `/VERYSILENT /SUPPRESSMSGBOXES` (`/LOG="…"` for a log). On start, SYSCOM keeps the
+Installed apps entry's version in step with in-app updates.
+
+## API docs
+
+The API reference lives in one place, `web/js/api-reference.js`. The dashboard's API window renders it with the PC's
+own address, sensors and cards; `node tools/api-docs.mjs` writes the same reference into `docs/API.md` (between the
+`api-reference` markers). After changing an endpoint, update that file and run the script; CI fails when `docs/API.md`
+is out of date (`node tools/api-docs.mjs --check`).
+
+## Benchmark
+
+```powershell
+pwsh build\benchmark.ps1 -Key syscom_…            # or -Password …; -Seconds 60 by default
+pwsh build\benchmark.ps1 -Key syscom_… -Compare HWiNFO64, 'C:\Tools\LibreHardwareMonitor\LibreHardwareMonitor.exe'
+```
+
+Measures the installed `syscom.exe` (CPU as a share of the PC and of one core, working set and private memory, and
+the data sent) idle, and with a dashboard streaming every sensor at 1 s and at 500 ms. `-Compare` measures other
+monitoring apps the same way afterwards (a running process by name, or an .exe that it starts and closes). CI runs it
+on every change with LibreHardwareMonitor's own app for comparison; the table is in the *installer* job's summary.
 
 ## CI
 
-- `.github/workflows/ci.yml`: Windows build of all three projects (warnings are errors), JS syntax check, and a
-  Linux smoke test that starts the server with mock sensors and probes the API.
-- `.github/workflows/release.yml`: on a `v*` tag, runs `package.ps1` and publishes a GitHub release.
+- `.github/workflows/ci.yml`: Windows build of all three projects (warnings are errors), JS syntax check, the API
+  docs check; the setup built, installed silently, checked (service, tray task, firewall, Start menu, Installed apps,
+  the API), benchmarked, upgraded over itself and uninstalled; and a Linux smoke test that starts the server with mock
+  sensors and probes the API, API keys and the WebSocket.
+- `.github/workflows/release.yml`: when a merge to main bumps the version in `versions.json` (or on a `v*` tag), runs
+  `package.ps1` and publishes a GitHub release with the setup, the zip and the update assets.

@@ -117,11 +117,12 @@ body:not(.editing) .group.untitled:not(:has(.card)) { display: none; }
 .group.collapsed > .grid { display: none; }
 body.editing .group.collapsed > .grid { display: grid; }
 .sec-title-input { max-width: 260px; padding: 6px 10px; font-weight: 600; }
-.sec-head .grip, .sec-del {
+.sec-head .grip, .sec-del, .sec-api {
   flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--muted); cursor: grab; touch-action: none;
 }
 .sec-del { color: var(--bad); cursor: pointer; touch-action: auto; }
+.sec-api { color: var(--text); cursor: pointer; touch-action: auto; }
 .sec-head svg { width: 18px; height: 18px; }
 .edit-only { display: none !important; }
 body.editing .edit-only { display: grid !important; }
@@ -316,6 +317,7 @@ body.editing .card-tools { display: block; }
 @container card (max-width: 112px) { .tool-row { flex-direction: column; } }
 .tool-row svg { width: 15px; height: 15px; }
 .tool-row .del { color: var(--bad); }
+.tool-row .api { color: var(--accent); }
 body.editing .card-icon { display: none; }
 .resize {
   position: absolute; right: 0; bottom: 0; z-index: 2; display: grid; place-items: center; width: 26px; height: 26px;
@@ -467,6 +469,7 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 .pills button.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 .picker.searching .tabs button.active { background: none; border-color: transparent; color: var(--muted); }
 .field-hint { flex: 2 !important; align-self: end; margin: 0 0 4px; font-size: 12px; }
+#w-interval-hint { flex: 1 !important; }
 
 /* History dialog */
 #dlg-history { width: min(860px, 100%); }
@@ -592,3 +595,51 @@ body:not(.full) #full-exit { display: none; }
 #dlg-look .row .field { flex: 0 1 auto; }
 #k-color-field .field { display: flex; align-items: center; gap: 10px; }
 .buttons .grow { flex: 1; }
+
+/* API window (js/apiview.js) */
+#dlg-api { width: min(860px, 100%); }
+#api-tabs { justify-self: start; }
+#api-body { display: grid; gap: 12px; min-width: 0; }
+#api-body > h3 { margin: 10px 0 0; }
+#api-body > p { margin: 0; font-size: 14px; line-height: 1.5; }
+#api-body code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .92em; }
+#api-body p code, #api-body td code, .api-keyline code { background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+button.link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+button.small { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+.api-keyline { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
+.api-keyline.ok { background: color-mix(in srgb, var(--good, #22c55e) 14%, var(--surface)); }
+.api-warn { margin: 0; }
+.api-ep { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.api-ep .hint { margin: 0; }
+.api-ep-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.api-ep-head h4 { margin: 0; font-size: 15px; }
+.api-badge { font-size: 11px; font-weight: 600; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 2px 8px; white-space: nowrap; }
+.api-url { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.api-url code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 13px; }
+.api-url code b { color: var(--accent); margin-right: 4px; }
+.api-params { border-collapse: collapse; font-size: 13px; }
+.api-params td { padding: 3px 10px 3px 0; vertical-align: top; }
+.api-code { display: grid; gap: 0; min-width: 0; }
+.api-langs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.api-langs button {
+  flex: none; padding: 6px 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; background: none;
+  color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.api-langs button.active { background: var(--surface-2); border-color: var(--line); color: var(--text); }
+.api-snippet { position: relative; min-width: 0; }
+.api-snippet pre, .api-out {
+  margin: 0; padding: 10px 12px; overflow-x: auto; border: 1px solid var(--line); border-radius: 0 10px 10px 10px;
+  background: var(--surface-2); font-size: 12.5px; line-height: 1.45; max-height: 340px;
+}
+.api-snippet > button { position: absolute; top: 6px; right: 6px; background: var(--surface); }
+.api-try { display: grid; gap: 6px; justify-items: start; }
+.api-out { border-radius: 10px; width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.api-keys li { align-items: flex-start; }
+.api-keys .sub code { background: none; padding: 0; }
+.api-secret { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--accent); border-radius: 12px; }
+.api-secret p { margin: 0; }
+#api-new-key select { width: auto; }
+.api-cats { border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
+.api-cats th, .api-cats td { padding: 4px 8px; text-align: center; border-bottom: 1px solid var(--line); }
+.api-cats tbody th { text-align: left; white-space: nowrap; }
+.api-cats small { color: var(--muted); }

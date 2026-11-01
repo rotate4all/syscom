@@ -8,7 +8,8 @@
   and run this script again. Everything downloaded is verified against the checksum its publisher provides.
 
   Output (dist\):
-    SYSCOM-<ver>-win-x64.zip     full package: extract and run install.ps1 as administrator
+    SYSCOM-Setup-<ver>.exe       the installer (Inno Setup; built unless -NoInstaller)
+    SYSCOM-<ver>-win-x64.zip     full package: extract and run install.ps1 as administrator (scripted installs)
     syscom-app-<ver>.zip         update asset: server, updater, tray app
     syscom-web-<ver>.zip         update asset: web dashboard
     feed.json                    update feed read by installed copies (publish with the GitHub release)
@@ -22,7 +23,8 @@
 param(
     [string]$Configuration = 'Release',
     [string]$Repository = 'rotate4all/syscom',
-    [switch]$SkipDownloads
+    [switch]$SkipDownloads,
+    [switch]$NoInstaller   # skip SYSCOM-Setup.exe (it needs Inno Setup, which is fetched when missing)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -118,6 +120,14 @@ Copy-Item (Join-Path $root 'install\README.txt') $stage
     built = (Get-Date).ToString('s')
 } | ConvertTo-Json | Set-Content (Join-Path $stage 'components.json') -Encoding utf8
 
+# ---------------------------------------------------------------- installer (Inno Setup)
+if (-not $NoInstaller) {
+    Step "Installer (Inno Setup $($versions.innosetup))"
+    $iscc = & (Join-Path $PSScriptRoot 'get-innosetup.ps1') -Version $versions.innosetup -CacheDir $cache
+    & $iscc /Q "/DAppVersion=$ver" "/DPackageDir=$stage" "/O$dist" (Join-Path $root 'install\syscom.iss')
+    if ($LASTEXITCODE) { throw 'Building the installer failed' }
+}
+
 # ---------------------------------------------------------------- archives + update feed
 Step 'Creating archives'
 $full = Join-Path $dist "SYSCOM-$ver-win-x64.zip"
@@ -145,4 +155,4 @@ $base = "https://github.com/$Repository/releases/download/v$ver"
 
 Step 'Done'
 Get-ChildItem $dist -File | Format-Table Name, @{ n = 'Size (MB)'; e = { [math]::Round($_.Length / 1MB, 1) } } -AutoSize
-Write-Host "Install: extract $(Split-Path $full -Leaf) and run install.ps1 as administrator."
+Write-Host "Install: run SYSCOM-Setup-$ver.exe (or extract $(Split-Path $full -Leaf) and run install.ps1 as administrator)."

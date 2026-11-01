@@ -21,6 +21,8 @@ jobs:
 
       - name: Compare versions.json with the latest releases
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $pinned = Get-Content versions.json -Raw | ConvertFrom-Json
           $problems = @()
@@ -44,7 +46,13 @@ jobs:
           $newerLts = $index | Where-Object { $_.'release-type' -eq 'lts' -and $_.'support-phase' -eq 'active' -and [version]$_.'channel-version' -gt [version]$channel } | Select-Object -First 1
           if ($newerLts) { Write-Output "::warning::.NET $($newerLts.'channel-version') LTS is out; SYSCOM is on $channel ($($ours.'support-phase'))." }
 
-          Write-Output "LibreHardwareMonitorLib $lhm · Windows service hosting $hosting · .NET $channel ($($ours.'support-phase')) · PawnIO: $($pinned.pawnio)"
+          # Inno Setup (builds SYSCOM-Setup.exe): its GitHub releases are tagged is-x_y_z.
+          $headers = @{ 'User-Agent' = 'SYSCOM-ci' }
+          if ($env:GH_TOKEN) { $headers.Authorization = "Bearer $env:GH_TOKEN" }
+          $inno = (Invoke-RestMethod 'https://api.github.com/repos/jrsoftware/issrc/releases/latest' -Headers $headers).tag_name -replace '^is-', '' -replace '_', '.'
+          if ($pinned.innosetup -ne $inno) { $problems += "Inno Setup: versions.json pins $($pinned.innosetup), latest is $inno" }
+
+          Write-Output "LibreHardwareMonitorLib $lhm · Windows service hosting $hosting · .NET $channel ($($ours.'support-phase')) · PawnIO: $($pinned.pawnio) · Inno Setup $inno"
           if ($problems) {
             $problems | ForEach-Object { Write-Output "::error::$_" }
             exit 1

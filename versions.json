@@ -1,12 +1,13 @@
 {
   "$comment": "Pinned component versions for build\\package.ps1. Bump a version and re-run the script to rebuild the package. The management app can also update each component in place on an installed system.",
-  "syscom": "0.17.2",
-  "web": "0.17.0",
+  "syscom": "0.18.0",
+  "web": "0.18.0",
   "dotnet": {
     "channel": "10.0",
     "runtime": "latest"
   },
   "librehardwaremonitor": "0.9.6",
   "pawnio": "latest",
-  "windowsServices": "10.0.14"
+  "windowsServices": "10.0.14",
+  "innosetup": "7.1.1"
 }

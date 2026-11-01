@@ -84,7 +84,7 @@ export const LOOK_DEFAULTS = Object.freeze({
   dim: 0,              // 0–80 %: fades the picture toward the theme's background, for legibility
   alpha: 100,          // card background opacity, %
   round: 100,          // corner rounding of cards and bars, % of the default (0 = square)
-  anim: 'smooth',      // smooth | off
+  anim: 'smooth',      // smooth (always) | auto (unless the device asks for reduced motion) | off
 });
 
 export function normalizeLook(l) {
@@ -98,7 +98,7 @@ export function normalizeLook(l) {
     dim: Math.min(80, pct(x.dim) ?? 0),
     alpha: pct(x.alpha) ?? 100,
     round: pct(x.round) ?? 100,
-    anim: pick(x.anim, ['smooth', 'off'], 'smooth'),
+    anim: pick(x.anim, ['smooth', 'auto', 'off'], 'smooth'),
   };
 }
 

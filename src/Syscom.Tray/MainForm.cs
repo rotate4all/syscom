@@ -226,7 +226,7 @@ internal sealed class MainForm : Form
             else
             {
                 _title.Text = "SYSCOM is not running";
-                _summary.Text = state is null ? "The SYSCOM service is not installed. Run install.ps1 as administrator." : $"Service state: {state}";
+                _summary.Text = state is null ? "The SYSCOM service is not installed. Run the SYSCOM setup (SYSCOM-Setup.exe) again." : $"Service state: {state}";
                 // Ask once per stop, not on every refresh.
                 if (state == "STOPPED" && !_askedToStart && Visible)
                 {

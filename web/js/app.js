@@ -7,10 +7,12 @@ import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, unitLabel, decimalsFor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf, pct,
   MAX_EXTRA, EXTRA_SHOW, EXTRA_ALIGN, EXTRA_SIZE, NUMBER_SIZE, UNIT_POS, unitPosOf, MAX_EXTRA_LABEL, extraLabel, extrasOf, readingText, HISTORY,
+  intervalOf, WIDGET_INTERVALS,
 } from './widgets.js';
 import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
 import { exportLayout, readLayoutFile, remapLayout, fileName } from './transfer.js';
+import { openApi } from './apiview.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const state = load();
@@ -26,8 +28,10 @@ const ICON = {
   del: '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/></svg>',
   resize: '<svg viewBox="0 0 24 24"><path d="M20 11v9h-9M20 20 12 12"/></svg>',
   chevron: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+  api: '<svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14"/></svg>',
 };
 const ROW_LIMIT = MAX_H;
+const DASH = 'dash';   // series key of the cards that refresh at the dashboard's rate
 
 const persist = () => save({ ...state, active });
 
@@ -69,18 +73,26 @@ function onData(dev, frame) {
   const page = pages.get(dev.key);
   if (!page) return;
   const conn = conns.get(dev.key);
-  // Recent readings for graphs, kept per page so rebuilt cards keep their history.
-  for (const [id, i] of conn.index) {
-    const a = page.series.get(id);
-    if (!a) continue;
-    a.push(frame.v[i]);
-    if (a.length > HISTORY) a.shift();
+  // Recent readings for graphs, kept per page (and per refresh rate) so rebuilt cards keep their history. A frame
+  // from a PC that sends one rate for everything (older than 0.18) feeds every rate.
+  const keys = frame.s == null ? null : frame.s === dev.interval ? [frame.s, DASH] : [frame.s];
+  for (const [id, i] of frame.index) {
+    const byRate = page.series.get(id);
+    if (!byRate) continue;
+    for (const [key, a] of byRate) {
+      if (keys && !keys.includes(key)) continue;
+      a.push(frame.v[i]);
+      if (a.length > HISTORY) a.shift();
+    }
   }
   paintFrame(dev, frame);
   if (dlgWidget.open && editTarget?.dev === dev) { takeFrame(conn, frame); paintLive(); }
 }
 
-/** Puts a frame's readings on a page's cards; also right after the page is rebuilt, so no card waits blank. */
+/**
+ * Puts a frame's readings on the cards that refresh at its rate (all of them for a single-rate frame); also right
+ * after the page is rebuilt, with the latest readings of every stream (conn.last), so no card waits blank.
+ */
 function paintFrame(dev, frame) {
   const page = pages.get(dev.key);
   const conn = conns.get(dev.key);
@@ -88,7 +100,7 @@ function paintFrame(dev, frame) {
   const visible = state.devices[active] === dev && document.visibilityState === 'visible';
   for (const w of dev.widgets) {
     const inst = page.widgets.get(w.id);
-    if (!inst) continue;
+    if (!inst || (frame.s != null && intervalOf(w, dev.interval) !== frame.s)) continue;
     const max = inst.maxFrom ? inst.maxFrom.reduce((sum, id) => {
       const x = conn.value(frame, id);
       return sum == null || x == null ? null : sum + x;
@@ -450,11 +462,16 @@ function renderPage(dev) {
     grid.className = 'grid';
     for (const w of g.items) {
       const sensor = conn.sensors.get(w.sensor);
+      // A card with its own refresh rate keeps its own readings and glides over its own interval.
+      const key = w.interval || DASH;
       const inst = createWidget(w, sensor, widgetTools(dev, w), (id) => conn.sensors.get(id), (id) => {
-        let a = p.series.get(id);
-        if (!a) p.series.set(id, (a = []));
+        let byRate = p.series.get(id);
+        if (!byRate) p.series.set(id, (byRate = new Map()));
+        let a = byRate.get(key);
+        if (!a) byRate.set(key, (a = []));
         return a;
-      }, { motion: p.motion });
+      }, { motion: w.interval ? { get on() { return p.motion.on; }, get ms() { return glideMs(w.interval); } } : p.motion });
+      if (w.interval) inst.el.style.setProperty('--anim', `${p.motion.on ? glideMs(w.interval) : 0}ms`);
       inst.maxFrom = effectiveMaxFrom(w, sensor, conn.catalog);
       inst.signature = widgetSignature(w, conn);
       inst.el.addEventListener('click', (e) => {
@@ -520,6 +537,7 @@ function renderPage(dev) {
   };
   button('Layouts…', () => openLayouts(dev));
   button('Appearance…', () => openLook(dev));
+  button('API…', () => showApi(dev));
   if (dev.widgets.length) {
     const reset = document.createElement('button');
     reset.className = 'ghost';
@@ -545,7 +563,9 @@ function sectionHead(dev, sec, group) {
     <button class="grip edit-only" type="button" title="Drag to move this section" aria-label="Move section">${ICON.grip}</button>
     <button class="sec-toggle view-only" type="button" aria-expanded="true"><span class="sec-title"></span>${ICON.chevron}</button>
     <input class="sec-title-input edit-only" maxlength="40" aria-label="Section name">
+    <button class="sec-api edit-only" type="button" title="API: read this section from scripts and apps" aria-label="API">${ICON.api}</button>
     <button class="sec-del edit-only" type="button" title="Remove section (its widgets stay)">${ICON.del}</button>`;
+  $('.sec-api', head).onclick = () => showApi(dev, { scope: { kind: 'section', item: sec } });
   $('.sec-title', head).textContent = sec.title;
   const input = $('.sec-title-input', head);
   input.value = sec.title;
@@ -619,10 +639,12 @@ function widgetTools(dev, w) {
     <div class="tool-row">
       <button class="grip" type="button" title="Drag to move" aria-label="Move">${ICON.grip}</button>
       <button class="edit" type="button" title="Edit" aria-label="Edit">${ICON.edit}</button>
+      <button class="api" type="button" title="API: read this card from scripts and apps" aria-label="API">${ICON.api}</button>
       <button class="del" type="button" title="Remove" aria-label="Remove">${ICON.del}</button>
     </div>
     <span class="resize" title="Drag to resize" aria-hidden="true">${ICON.resize}</span>`;
   $('.edit', tools).onclick = () => openWidgetEditor(dev, w);
+  $('.api', tools).onclick = () => showApi(dev, { scope: { kind: 'widget', item: w } });
   $('.del', tools).onclick = () => {
     dev.widgets = dev.widgets.filter((x) => x !== w);
     saveLayout(dev); renderPage(dev); conns.get(dev.key)?.subscribe();
@@ -859,7 +881,8 @@ function openWidgetEditor(dev, widget, sectionId = null) {
 const liveValues = new Map();   // sensor id → latest value, while the editor is open
 function takeFrame(conn, frame) {
   if (!frame) return;
-  for (const [id, i] of frame.index || conn.index) liveValues.set(id, frame.v[i]);
+  if (!frame.index) { for (const [id, v] of conn.values) liveValues.set(id, v); return; }   // conn.last: every stream
+  for (const [id, i] of frame.index) liveValues.set(id, frame.v[i]);
 }
 function paintLive() {
   const conn = conns.get(editTarget?.dev.key);
@@ -1053,6 +1076,7 @@ function fillWidgetForm(w, sensor, catalog) {
   $('#w-nsize').value = NUMBER_SIZE.some(([k]) => k === w.numSize) ? w.numSize : 'm';
   $('#w-upos').value = unitPosOf(w);
   $('#w-scale-show').checked = !w.hideScale;
+  fillIntervalSelect(w.interval);
   setPctSelect('#w-alpha', w.alpha, '% opaque');
   setPctSelect('#w-round', w.round, '% rounded');
   syncThickness();
@@ -1119,6 +1143,17 @@ for (const [k, l] of NUMBER_SIZE) $('#w-nsize').add(new Option(l, k));
 for (const [k, l] of UNIT_POS) $('#w-upos').add(new Option(l, k));
 
 /** A card's own opacity or rounding ('' = the dashboard's); a value set elsewhere gets its own choice. */
+const seconds = (ms) => (ms < 1000 ? `${ms} ms` : `${ms / 1000} s`);
+
+/** A card's refresh rate: the dashboard's (empty value) or its own. */
+function fillIntervalSelect(current) {
+  const box = $('#w-interval');
+  const dash = editTarget?.dev.interval || DEFAULT_INTERVAL;
+  const list = current && !WIDGET_INTERVALS.includes(current) ? [...WIDGET_INTERVALS, current].sort((a, b) => a - b) : WIDGET_INTERVALS;
+  box.replaceChildren(new Option(`Like the dashboard (${seconds(dash)})`, ''), ...list.map((ms) => new Option(`Every ${seconds(ms)}`, String(ms))));
+  box.value = current ? String(current) : '';
+}
+
 function setPctSelect(sel, value, suffix) {
   const v = pct(value);
   const box = $(sel);
@@ -1320,6 +1355,7 @@ function readForm(id) {
     numSize: $('#w-nsize').value !== 'm' ? $('#w-nsize').value : undefined,
     unitPos: $('#w-upos').value !== 'right' ? $('#w-upos').value : undefined,
     hideScale: ['bar', 'vbar'].includes($('#w-type').value) && !$('#w-scale-show').checked ? true : undefined,
+    interval: $('#w-interval').value === '' ? undefined : Number($('#w-interval').value),
     alpha: $('#w-alpha').value === '' ? undefined : Number($('#w-alpha').value),
     round: $('#w-round').value === '' ? undefined : Number($('#w-round').value),
     extra: extrasShown.length ? extrasShown.filter((x) => x.sensor !== $('#w-sensor').value).slice(0, MAX_EXTRA) : undefined,
@@ -1459,7 +1495,7 @@ function renderSettings() {
 /** Polling choices: 0.5 s … 10 s (1 s is the default); an interval set some other way stays listed. */
 function intervalOptions(current) {
   const list = INTERVALS.includes(current) ? INTERVALS : [...INTERVALS, current].sort((a, b) => a - b);
-  return list.map((ms) => `<option value="${ms}"${ms === current ? ' selected' : ''}>${ms < 1000 ? `${ms} ms` : `${ms / 1000} s`}${ms === DEFAULT_INTERVAL ? ' (default)' : ''}</option>`).join('');
+  return list.map((ms) => `<option value="${ms}"${ms === current ? ' selected' : ''}>${seconds(ms)}${ms === DEFAULT_INTERVAL ? ' (default)' : ''}</option>`).join('');
 }
 
 function renderAppInstall() {
@@ -1523,6 +1559,14 @@ function showAddError(ex) {
 
 $('#btn-open-layouts').onclick = () => { const dev = state.devices[active]; if (dev) { dlgSettings.close(); openLayouts(dev); } };
 $('#btn-open-look').onclick = () => { const dev = state.devices[active]; if (dev) { dlgSettings.close(); openLook(dev); } };
+$('#btn-open-api').onclick = () => { const dev = state.devices[active]; if (dev) { dlgSettings.close(); showApi(dev, { tab: 'keys' }); } };
+
+/** The API window (apiview.js) for a PC: examples for a card, a section or the dashboard, the reference, the keys. */
+function showApi(dev, { scope, tab } = {}) {
+  const conn = conns.get(dev.key);
+  if (!conn?.device.token) { alert(`Sign in to ${dev.name} first.`); return; }
+  openApi(dev, conn, { scope, tab, layout: layoutMode() === 'phone' && dev.layouts.phone ? 'phone' : undefined });
+}
 
 // ---------- history: tap a card for its sensor's last 1 to 30 days
 const dlgHistory = $('#dlg-history');
@@ -1608,11 +1652,17 @@ const backgrounds = new Map();      // dev.key → { id, url } of the loaded pic
 const bgLoading = new Map();        // dev.key → id being fetched
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
-/** How long a change glides, in ms: most of one polling interval, so motion is continuous; 0 = off. */
+/**
+ * How long a change glides, in ms: most of one polling interval, so motion is continuous; 0 = off.
+ * "Smooth" animates even when the device asks for reduced motion: Windows does whenever its Animation effects are
+ * off, which many gaming PCs have, and that made animations silently disappear on desktops. "Follow system" obeys it.
+ */
 function motionMs(dev, look = dev.look) {
-  if (look.anim === 'off' || reducedMotion.matches) return 0;
-  return Math.round(Math.min(1500, Math.max(250, dev.interval * 0.85)));
+  if (look.anim === 'off' || (look.anim === 'auto' && reducedMotion.matches)) return 0;
+  return glideMs(dev.interval);
 }
+
+const glideMs = (interval) => Math.round(Math.min(1500, Math.max(250, interval * 0.85)));
 
 /** Puts a PC's look on its page; `look` may be a draft (the appearance editor previews it live). */
 function applyLook(dev, look = dev.look, picture = null) {
@@ -1623,6 +1673,9 @@ function applyLook(dev, look = dev.look, picture = null) {
   p.motion.on = ms > 0;
   p.motion.ms = ms;
   st.setProperty('--anim', `${ms}ms`);
+  for (const w of dev.widgets) {   // cards with their own refresh rate glide over their own interval
+    if (w.interval) p.widgets.get(w.id)?.el.style.setProperty('--anim', `${ms ? glideMs(w.interval) : 0}ms`);
+  }
   st.setProperty('--a', String(look.alpha / 100));
   st.setProperty('--rf', String(look.round / 100));
   st.setProperty('--cap', look.round >= 50 ? 'round' : 'butt');
@@ -1687,6 +1740,7 @@ function fillLook() {
   const d = lookOf.draft;
   document.querySelectorAll('#k-bg button').forEach((b) => b.classList.toggle('active', b.dataset.bg === d.bg));
   document.querySelectorAll('#k-anim button').forEach((b) => b.classList.toggle('active', b.dataset.anim === d.anim));
+  $('#k-anim-system').hidden = !reducedMotion.matches;
   $('#k-color-field').hidden = d.bg !== 'color';
   $('#k-image-field').hidden = d.bg !== 'image';
   $('#k-color').value = d.color;

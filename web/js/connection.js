@@ -1,5 +1,5 @@
 // One live connection to a SYSCOM server: login, WebSocket stream, reconnect with backoff.
-import { effectiveMaxFrom } from './widgets.js';
+import { effectiveMaxFrom, intervalOf } from './widgets.js';
 
 const CLOSE_UNAUTHORIZED = 4401;
 const DAY = 86_400_000;
@@ -18,12 +18,15 @@ export class Connection extends EventTarget {
     this.status = 'idle';      // idle | connecting | online | offline | auth
     this.catalog = [];
     this.sensors = new Map();  // id → sensor info
-    this.index = new Map();    // id → position in data frames
+    this.index = new Map();    // id → position in data frames (single-rate form; see streams)
+    this.streams = new Map();  // stream id (= its interval in ms) → Map id → position in that stream's frames
+    this.multi = false;        // the PC sends several rates (0.18+); older PCs send everything at one rate
+    this.values = new Map();   // id → latest value, from whichever stream brought it
     this.ws = null;
     this.retry = 0;
     this.timer = 0;
     this.watchAll = false;     // true while the widget editor is open: stream every sensor for its live list
-    this.last = null;          // the latest data frame
+    this.last = null;          // the latest readings of every stream: { t, index: null } (see value())
     this.home = false;         // the PC that served this page
     this.route = null;         // 'direct' | 'relay' | null (not decided yet)
   }
@@ -190,17 +193,32 @@ export class Connection extends EventTarget {
     if (this.status !== 'auth') this.setStatus('idle');
   }
 
-  /** Ask only for the sensors this device's dashboard shows, at its polling interval (all of them while editing). */
+  /**
+   * Asks only for the sensors this device's dashboard shows: one stream per refresh interval in use (the dashboard's,
+   * plus any card that has its own), each stream's id being its interval. While the widget editor is open, the
+   * dashboard's stream carries every sensor for the editor's live list. `interval` + `sensors` (all of them) are sent
+   * too, for PCs older than 0.18 that only know one rate; those simply refresh every card at the dashboard's.
+   */
   subscribe() {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    if (this.watchAll) {   // no list = every sensor
-      this.ws.send(JSON.stringify({ type: 'subscribe', interval: this.device.interval }));
-      return;
+    const base = this.device.interval;
+    const groups = new Map([[base, new Set()]]);
+    for (const w of this.device.widgets) {
+      if (!w.sensor) continue;
+      const iv = intervalOf(w, base);
+      if (!groups.has(iv)) groups.set(iv, new Set());
+      for (const id of this.sensorsOf(w)) groups.get(iv).add(id);
     }
-    // Each widget's sensor, its extra readings, and the sensors that give it a live scale maximum (e.g. total VRAM).
-    const sensors = [...new Set(this.device.widgets.filter((w) => w.sensor).flatMap((w) =>
-      [w.sensor, ...(w.extra || []).map((x) => x.sensor), ...(effectiveMaxFrom(w, this.sensors.get(w.sensor), this.catalog) || [])]))];
-    this.ws.send(JSON.stringify({ type: 'subscribe', interval: this.device.interval, sensors }));
+    const streams = [...groups].filter(([iv, set]) => set.size || iv === base)
+      .map(([iv, set]) => ({ id: iv, interval: iv, sensors: [...set] }));
+    if (this.watchAll) delete streams.find((x) => x.id === base).sensors;   // no list = every sensor
+    const all = this.watchAll ? undefined : [...new Set(streams.flatMap((x) => x.sensors))];
+    this.ws.send(JSON.stringify({ type: 'subscribe', interval: base, sensors: all, streams }));
+  }
+
+  /** A card's sensor, its extra readings, and the sensors that give it a live scale maximum (e.g. total VRAM). */
+  sensorsOf(w) {
+    return [w.sensor, ...(w.extra || []).map((x) => x.sensor), ...(effectiveMaxFrom(w, this.sensors.get(w.sensor), this.catalog) || [])];
   }
 
   /** Streams every sensor (on) or just the dashboard's again (off). */
@@ -219,13 +237,25 @@ export class Connection extends EventTarget {
         this.sensors = new Map(m.sensors.map((s) => [s.id, s]));
         this.emit('catalog');
         break;
-      case 'subscribed':
-        this.index = new Map(m.sensors.map((id, i) => [id, i]));
+      case 'subscribed': {
+        this.multi = Array.isArray(m.streams);
+        this.streams = new Map((m.streams || []).map((x) => [x.id, new Map(x.sensors.map((id, i) => [id, i]))]));
+        this.index = this.multi ? new Map() : new Map(m.sensors.map((id, i) => [id, i]));
+        // Forget readings nobody streams any more (an old value would show up on a card added later).
+        const live = new Set([...this.index.keys(), ...[...this.streams.values()].flatMap((x) => [...x.keys()])]);
+        for (const id of this.values.keys()) if (!live.has(id)) this.values.delete(id);
         break;
-      case 'data':
-        this.last = { t: m.t, v: m.v, index: this.index };   // the order of the values in this frame
-        this.emit('data', this.last);
+      }
+      case 'data': {
+        // s = the stream (its interval) when the PC sends several rates; none = the single-rate form.
+        const index = m.s == null ? this.index : this.streams.get(m.s);
+        if (!index) break;
+        const frame = { t: m.t, v: m.v, s: m.s ?? null, index };
+        for (const [id, i] of index) this.values.set(id, m.v[i]);
+        this.last = { t: m.t, v: null, s: null, index: null };
+        this.emit('data', frame);
         break;
+      }
       case 'layout':
         this.emit('layout', { rev: m.rev });
         break;
@@ -235,8 +265,10 @@ export class Connection extends EventTarget {
     }
   }
 
+  /** A sensor's value in a frame; a frame without an index (this.last) means the latest value from any stream. */
   value(frame, sensorId) {
-    const i = (frame.index || this.index).get(sensorId);
+    if (!frame.index) return this.values.get(sensorId) ?? null;
+    const i = frame.index.get(sensorId);
     return i === undefined ? null : frame.v[i];
   }
 

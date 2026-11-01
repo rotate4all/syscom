@@ -8,6 +8,46 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.18.0] - 2026-11-01
+
+### Added
+- **A Windows setup: `SYSCOM-Setup-<version>.exe`.** Download it, run it, click through: no zip to extract, no
+  PowerShell script, no "Run with PowerShell" blocked by Windows because the file came from the internet. It installs
+  SYSCOM with its own .NET runtime, the PawnIO driver when needed, the service, the firewall rules and the tray app,
+  lists SYSCOM in Settings → Apps → Installed apps with an uninstaller (which asks whether to keep your settings and
+  history), and upgrades an existing SYSCOM in place, including one installed with `install.ps1`. Made with Inno
+  Setup 7.1.1. It isn't code-signed yet, so Windows may say it protected your PC: **More info → Run anyway**. The
+  zip with `install.ps1` stays available for scripted installs.
+- **Each card can refresh at its own rate**: every 500 ms to every 60 s, or (the default) at the dashboard's rate.
+  Card editor → *Refresh*. Cards on different rates share one connection; the PC reads its sensors at the fastest
+  rate any card asks for. PCs still on an older version keep using the dashboard's rate.
+- **An API with keys.** Create and revoke keys in the dashboard (Settings → *API keys and reference…*): a read key
+  reads everything the dashboard shows, a full-access key can also change the dashboard and the list of PCs. Every
+  sensor with its value (filter by category, kind of reading, hardware or name), sensors by category, the history,
+  and cards, sections and whole dashboards with their readings as the cards show them (unit, text, colour level).
+  The live WebSocket stream takes keys too.
+- **An API button on every card, section and dashboard** (`</>` in edit mode, and *API…* in the dashboard's tools).
+  It shows the exact address and ready-to-run examples (curl, PowerShell, Python, JavaScript, browser) for that card,
+  filled in with the PC's address and your key, and *Try it* shows the live answer. The window also has the keys and
+  the full reference, with examples built from the PC's own sensors.
+- **API reference on GitHub**: [docs/API.md](docs/API.md) is generated from the same source as the in-app one, and
+  CI fails if it falls behind.
+- **Benchmark**: `build\benchmark.ps1` measures SYSCOM's CPU and memory idle and with a dashboard streaming every
+  sensor at 1 s and 500 ms, and other monitoring apps side by side with `-Compare`. CI runs it on every change,
+  against LibreHardwareMonitor's own app. The README shows the results.
+- **CI installs the setup** on Windows, checks the service, tray task, firewall rules, Start menu, Installed apps
+  entry and the API, upgrades over it and uninstalls it, checking nothing is left behind.
+
+### Changed
+- The README shows what the dashboard can do now: card types and gauge styles, per-card options, layouts, looks, the
+  API and how light SYSCOM is, with new screenshots. The roadmap includes a Linux release.
+
+### Fixed
+- **Animations didn't play in desktop browsers** (they did on phones). Windows with *Animation effects* turned off
+  (Settings → Accessibility → Visual effects, off on many PCs) tells browsers to reduce motion, and the dashboard
+  followed it. Appearance → *Animations* now has **Smooth** (the default: always animate), **Follow system** (the old
+  behaviour) and **Off**.
+
 ## [0.17.2] - 2026-11-01
 
 ### Fixed
