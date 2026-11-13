@@ -21,10 +21,23 @@ public sealed class LhmSensorSource : ISensorSource
     private Exception? _openError;
     private List<(ISensor Sensor, string Id)> _sensors = new();
 
+    // Graphics cards being switched off (a driver install) aren't read: see GpuStateWatch.
+    private readonly GpuStateWatch? _gpuWatch = GpuStateWatch.TryStart();
+    private Dictionary<string, bool> _gpusAtOpen = new();
+    private long _gpuChangesAtOpen;
+    private bool _gpusOpened;
+    private bool _gpusPaused;
+    private string _gpuState = "";
+    private long _gpuStateSince;
+
     // LibreHardwareMonitor adds some sensors only once it has read them (NVIDIA's "GPU Package" power, PCIe and D3D
     // readings, some drive and Super I/O sensors), and drops sensors that stop reporting. Catalog changes are sent to
     // every browser, so after the first one they're batched to at most one per few seconds.
     private static readonly TimeSpan RebuildEvery = TimeSpan.FromSeconds(3);
+    // A card that's back is opened again once nothing has changed for this long (its driver has finished starting),
+    private static readonly TimeSpan GpuSettle = TimeSpan.FromSeconds(3);
+    // and the others are opened again without one that stays off this long (disabled, or its driver removed).
+    private static readonly TimeSpan GpuGiveUp = TimeSpan.FromSeconds(20);
 
     public LhmSensorSource(ILogger log)
     {
@@ -32,7 +45,7 @@ public sealed class LhmSensorSource : ISensorSource
         _computer = new Computer
         {
             IsCpuEnabled = true,
-            IsGpuEnabled = true,
+            IsGpuEnabled = false, // opened on the first read, once SYSCOM can answer Windows about them (GpuStateWatch)
             IsMemoryEnabled = true,
             IsMotherboardEnabled = true,
             IsStorageEnabled = true,
@@ -56,13 +69,36 @@ public sealed class LhmSensorSource : ISensorSource
         if (!_opened)
         {
             _opened = true;
+            _gpuChangesAtOpen = _gpuWatch?.Changes ?? 0;
+            var cardsOpen = _gpuWatch?.CardsOpen ?? 0;
             try { _computer.Open(); }
             catch (Exception ex) { _openError = ex; }
+            _gpusAtOpen = GpuStateWatch.Adapters();
             _startedAt = Stopwatch.GetTimestamp();
+            if (_gpuWatch is not null && _gpusAtOpen.Count > 0)
+                _log.LogInformation(cardsOpen > 0
+                    ? "Graphics cards: Windows asks SYSCOM before switching one off (driver installs), and waits for its readings to finish"
+                    : "Graphics cards: checked before every reading for a card being switched off (driver installs). Run as administrator so Windows also asks SYSCOM first");
         }
         if (_openError is not null) throw new InvalidOperationException(_openError.Message, _openError);
 
-        foreach (var hw in _computer.Hardware) UpdateRecursive(hw);
+        foreach (var hw in _computer.Hardware)
+            if (!IsGpu(hw)) UpdateRecursive(hw);
+        // The graphics cards last, right after checking that none of them is being switched off, and while holding the
+        // watch's read gate: Windows waits for that before it removes a card.
+        var gpusReadable = GpusReadable(out var reopen);
+        reopen |= !_gpusOpened;
+        if (gpusReadable && (_gpuWatch?.TryBeginRead() ?? true))
+        {
+            try
+            {
+                if (reopen) OpenGpus();
+                foreach (var hw in _computer.Hardware)
+                    if (IsGpu(hw)) UpdateRecursive(hw);
+            }
+            finally { _gpuWatch?.EndRead(); }
+        }
+        else gpusReadable = false;
 
         var changed = false;
         if (_dirty && (_rebuiltAt == 0 || Stopwatch.GetElapsedTime(_rebuiltAt) >= RebuildEvery))
@@ -75,6 +111,7 @@ public sealed class LhmSensorSource : ISensorSource
 
         foreach (var (sensor, id) in _sensors)
         {
+            if (!gpusReadable && IsGpu(sensor.Hardware)) continue; // no stale readings while a card is off
             if (sensor.Value is { } v && float.IsFinite(v)) values[id] = v;
         }
         return changed;
@@ -84,6 +121,72 @@ public sealed class LhmSensorSource : ISensorSource
     {
         hw.Update();
         foreach (var sub in hw.SubHardware) UpdateRecursive(sub);
+    }
+
+    private static bool IsGpu(IHardware hw) => hw.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel;
+
+    /// <summary>
+    /// Whether the graphics cards may be read now: every card that was running when they were opened still runs, and
+    /// none went off, came back or was asked for since. Otherwise their readings pause, and once the cards are back
+    /// (or a card stays off), <paramref name="reopen"/> says to open them again, so the vendors' libraries start over
+    /// with the new driver.
+    /// </summary>
+    private bool GpusReadable(out bool reopen)
+    {
+        reopen = false;
+        if (_gpuWatch is null) return true;
+        var adapters = GpuStateWatch.Adapters();
+        var changes = _gpuWatch.Changes;
+        var allBack = _gpusAtOpen.All(a => !a.Value || adapters.GetValueOrDefault(a.Key));
+        if (!_gpusPaused)
+        {
+            if (allBack && changes == _gpuChangesAtOpen) return true;
+            _gpusPaused = true;
+            _log.LogInformation(_gpuWatch.RemovalAsked
+                ? "Windows is switching a graphics card off (it asked SYSCOM first, as a graphics driver install does). " +
+                  "The graphics card readings pause until it's back"
+                : "A graphics card is being switched off or restarted (as a graphics driver install does). The graphics " +
+                  "card readings pause until it's back, so its driver's libraries aren't called meanwhile");
+        }
+
+        // Wait until nothing has changed for a while: the cards' states and Windows' reports of them.
+        var state = $"{changes};{string.Join(';', adapters.Select(a => $"{a.Key}={a.Value}"))}";
+        if (state != _gpuState)
+        {
+            _gpuState = state;
+            _gpuStateSince = Stopwatch.GetTimestamp();
+            return false;
+        }
+        var quiet = Stopwatch.GetElapsedTime(_gpuStateSince);
+        if (!(allBack ? quiet >= GpuSettle : quiet >= GpuGiveUp)) return false;
+
+        _gpuWatch.Resume(); // watch the cards anew, and allow reads
+        _gpusAtOpen = adapters;
+        _gpuChangesAtOpen = _gpuWatch.Changes;
+        _gpusPaused = false;
+        reopen = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Finds the graphics cards in LibreHardwareMonitor, closing them first if they were open, so the vendors'
+    /// libraries start over (with a new driver, after an install).
+    /// </summary>
+    private void OpenGpus()
+    {
+        var again = _gpusOpened;
+        _gpusOpened = true;
+        try
+        {
+            _computer.IsGpuEnabled = false;
+            _computer.IsGpuEnabled = true;
+            if (again) _log.LogInformation("Reading the graphics cards again");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "The graphics cards could not be opened");
+        }
+        _rebuiltAt = 0; // list the cards' sensors now
     }
 
     private void Watch(IHardware hw)
@@ -147,6 +250,7 @@ public sealed class LhmSensorSource : ISensorSource
 
     public void Dispose()
     {
+        _gpuWatch?.Dispose();
         if (_opened) _computer.Close();
     }
 }

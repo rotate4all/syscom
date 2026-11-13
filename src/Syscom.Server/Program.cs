@@ -165,6 +165,19 @@ var backgrounds = app.Services.GetRequiredService<BackgroundStore>();
 var access = app.Services.GetRequiredService<ApiAccess>();
 var apiKeys = app.Services.GetRequiredService<ApiKeyStore>();
 if (cfg.HistoryEnabled) hub.Polled += history.Add;
+// A sensor read that stopped answering (a hardware driver) doesn't come back by itself: restart SYSCOM, as the tray
+// app's Restart server does. If that can't start, stop with an error, which Windows' recovery settings restart.
+var stoppedForRecovery = false;
+hub.Stalled += () =>
+{
+    try { components.Restart(); }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "The restart could not start; stopping, for Windows to start SYSCOM again");
+        stoppedForRecovery = true;
+        app.Lifetime.StopApplication();
+    }
+};
 var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 InstallEntry.SyncVersion(version, app.Logger);
 #if WINDOWS
@@ -173,7 +186,7 @@ InstallEntry.SyncVersion(version, app.Logger);
 app.Lifetime.ApplicationStopping.Register(() =>
 {
     if (OperatingSystem.IsWindows()
-        && app.Services.GetServices<IHostedService>().OfType<BackgroundService>().Any(s => s.ExecuteTask?.IsFaulted == true)
+        && (stoppedForRecovery || app.Services.GetServices<IHostedService>().OfType<BackgroundService>().Any(s => s.ExecuteTask?.IsFaulted == true))
         && app.Services.GetService<IHostLifetime>() is System.ServiceProcess.ServiceBase service)
         service.ExitCode = 1;
 });

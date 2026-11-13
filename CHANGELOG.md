@@ -8,6 +8,29 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.18.3] - 2026-11-12
+
+### Fixed
+- **The SYSCOM service crashed when an NVIDIA graphics driver was installed** (Event Viewer: Application Error
+  1000 for `syscom.exe` in `coreclr.dll`, exception code 0xc0000005, and a .NET Runtime 1026 entry whose stack
+  starts at `NvidiaML.NvmlDeviceGetPowerUsage`). Installing a graphics driver switches the card off for a moment, and
+  NVIDIA's NVML library, which LibreHardwareMonitor reads the card's power draw from, crashes the program that asks
+  it for a reading then. .NET can't catch that kind of crash, so the whole service went down until Windows started
+  it again. Now Windows asks SYSCOM before it switches a card off, and waits: SYSCOM finishes the reading in
+  progress, stops reading the graphics cards and lets Windows go on. Right before every reading SYSCOM also checks
+  that no card is about to go or has gone and come back (for when it runs without administrator rights, from
+  source say). The graphics card readings pause meanwhile, and a few seconds after the cards are back SYSCOM opens
+  them again, so NVIDIA's libraries start over with the new driver. The other readings carry on. The Windows event
+  log (Application) says when the readings pause and resume.
+- After a graphics card restarted (or its driver was reinstalled), NVIDIA's power draw stayed frozen at its last
+  value until SYSCOM restarted. The cards are opened again now, so the readings are live.
+- **A sensor read that never finishes no longer leaves the sensors stuck.** When reading the sensors takes more than
+  10 s (a hardware driver that stopped answering; 3 minutes for the first read, which finds the hardware), SYSCOM
+  writes an error in the event log and restarts itself, as **Restart server** in the tray menu does.
+
+### Changed
+- Microsoft.Extensions.Hosting.WindowsServices 10.0.15 (was 10.0.14).
+
 ## [0.18.2] - 2026-11-01
 
 ### Fixed
