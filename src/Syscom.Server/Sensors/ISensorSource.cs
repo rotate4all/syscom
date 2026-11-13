@@ -9,7 +9,7 @@ public sealed record SensorInfo(
     string Type,
     string Unit);
 
-/// <summary>A provider of sensor readings. <see cref="Update"/> is only ever called from the hub's polling thread.</summary>
+/// <summary>A provider of sensor readings. <see cref="Update"/> is only ever called by the hub's polling loop, one call at a time.</summary>
 public interface ISensorSource : IDisposable
 {
     string Name { get; }

@@ -31,6 +31,18 @@ public sealed class SensorHub : BackgroundService
     private const int ApiIntervalMs = 1000;
     private const int ApiHoldMs = 60_000;
 
+    // A read that doesn't finish (a hardware driver that stopped answering) would leave the sensors stuck for good, so
+    // the watchdog asks for a restart (Stalled) after this long. The first read finds the hardware and may take longer.
+    private const int StallSeconds = 10;
+    private const int FirstReadStallSeconds = 180;
+    private Timer? _watchdog;
+    private Task? _pollTask;
+    private long _polls;          // reads started
+    private long _pollRunning;    // number of the read in progress, 0 between reads
+    private long _watchedPoll;
+    private int _stallTicks;
+    private int _stalled;
+
     public SensorHub(IEnumerable<ISensorSource> sources, ServerConfig cfg, ILogger<SensorHub> log)
     {
         _sources = sources.ToList();
@@ -50,6 +62,9 @@ public sealed class SensorHub : BackgroundService
 
     /// <summary>Raised on the polling thread after every poll.</summary>
     public event Action<Snapshot>? Polled;
+
+    /// <summary>Raised once (on a timer thread) when a sensor read hasn't finished in time; SYSCOM then restarts.</summary>
+    public event Action? Stalled;
 
     /// <summary>Last error of a sensor source, or null when it is healthy.</summary>
     public string? SourceError(string sourceName) => _errors.TryGetValue(sourceName, out var e) ? e : null;
@@ -86,8 +101,9 @@ public sealed class SensorHub : BackgroundService
         // The first read finds the hardware, which can take a while as Windows starts. It runs here, after SYSCOM has
         // told Windows the service started and while the web server starts; browsers get the sensors when it's done.
         await Task.Yield();
+        _watchdog = new Timer(_ => CheckStall(), null, 1000, 1000);
         var scan = Stopwatch.StartNew();
-        Poll();
+        try { await PollAsync(ct); } catch (OperationCanceledException) { return; }
         Ready = true;
         _log.LogInformation("Found {Count} sensors in {Seconds:0.0} s", _catalog.Count, scan.Elapsed.TotalSeconds);
 
@@ -106,7 +122,7 @@ public sealed class SensorHub : BackgroundService
                 : _subscribers.Values.Min();
             if (api) interval = Math.Min(interval, ClampInterval(ApiIntervalMs));
             var sw = Stopwatch.StartNew();
-            Poll();
+            try { await PollAsync(ct); } catch (OperationCanceledException) { break; }
             var wait = interval - (int)sw.ElapsedMilliseconds;
             if (wait > 0)
             {
@@ -120,6 +136,43 @@ public sealed class SensorHub : BackgroundService
     private void Drain()
     {
         while (_wake.CurrentCount > 0 && _wake.Wait(0)) { }
+    }
+
+    /// <summary>
+    /// One read, on a pool thread, waited for here: stopping SYSCOM then doesn't wait for a read that never finishes.
+    /// Reads never overlap.
+    /// </summary>
+    private Task PollAsync(CancellationToken ct)
+    {
+        var poll = _pollTask = Task.Run(() =>
+        {
+            Volatile.Write(ref _pollRunning, Interlocked.Increment(ref _polls));
+            try { Poll(); }
+            finally { Volatile.Write(ref _pollRunning, 0); }
+        });
+        return poll.WaitAsync(ct);
+    }
+
+    /// <summary>
+    /// Every second: counts how long the read in progress has been running, and raises <see cref="Stalled"/> once
+    /// when that's too long. Counted in timer ticks rather than clock time, so a PC asleep in the middle of a read
+    /// doesn't count as a read that hangs.
+    /// </summary>
+    private void CheckStall()
+    {
+        var running = Volatile.Read(ref _pollRunning);
+        if (running == 0 || running != _watchedPoll)
+        {
+            _watchedPoll = running;
+            _stallTicks = 0;
+            return;
+        }
+        var limit = running == 1 ? FirstReadStallSeconds : StallSeconds;
+        if (++_stallTicks < limit || Interlocked.Exchange(ref _stalled, 1) != 0) return;
+        _log.LogError("Reading the sensors hasn't finished for {Seconds} s: a hardware driver isn't answering. SYSCOM " +
+                      "restarts to recover", limit);
+        try { Stalled?.Invoke(); }
+        catch (Exception ex) { _log.LogError(ex, "SYSCOM could not restart"); }
     }
 
     private void Poll()
@@ -164,8 +217,20 @@ public sealed class SensorHub : BackgroundService
 
     public override void Dispose()
     {
-        foreach (var s in _sources) s.Dispose();
+        _watchdog?.Dispose();
+        // A read that never finished is still inside a sensor library; closing the library under it could crash.
+        if (Finished(_pollTask, TimeSpan.FromSeconds(2)))
+            foreach (var s in _sources) s.Dispose();
+        else
+            _log.LogWarning("A sensor read is still running, so the sensor libraries are left open as SYSCOM stops");
         base.Dispose();
+    }
+
+    private static bool Finished(Task? task, TimeSpan wait)
+    {
+        if (task is null) return true;
+        try { return task.Wait(wait); }
+        catch (AggregateException) { return true; }
     }
 
     public sealed class Lease : IDisposable
