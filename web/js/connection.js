@@ -11,6 +11,30 @@ export async function probe(base, timeoutMs = 6000) {
   return r.json();
 }
 
+/** True for a request that never got an answer (no network, refused, untrusted certificate, timed out). */
+export function unreachable(ex) {
+  return ex instanceof TypeError || ex?.name === 'TimeoutError' || ex?.name === 'AbortError';
+}
+
+/**
+ * The ways the PC that served this page can name another PC in /relay/{target}: its server id (followed to its
+ * current address through LAN discovery and the stored device list), then the address it was added with, as
+ * "a.b.c.d-port" or "name-port" (for when this PC hasn't heard from it lately).
+ */
+export function relayTargets(serverId, url) {
+  const u = new URL(url);
+  return [...new Set([serverId, `${u.hostname}-${u.port || 47810}`].filter(Boolean))];
+}
+
+/** The first relayed address that answers: { info, target }; throws the first error if none does. */
+export async function probeRelay(targets, timeoutMs = 6000) {
+  let first = null;
+  for (const target of targets) {
+    try { return { info: await probe(`${location.origin}/relay/${target}`, timeoutMs), target }; } catch (ex) { first ??= ex; }
+  }
+  throw first || new Error("That PC doesn't answer.");
+}
+
 export class Connection extends EventTarget {
   constructor(device) {
     super();
@@ -29,6 +53,7 @@ export class Connection extends EventTarget {
     this.last = null;          // the latest readings of every stream: { t, index: null } (see value())
     this.home = false;         // the PC that served this page
     this.route = null;         // 'direct' | 'relay' | null (not decided yet)
+    this.relayTarget = null;   // how the relay names this PC (see relayTargets); null = the first way
   }
 
   /**
@@ -43,36 +68,69 @@ export class Connection extends EventTarget {
     return url.origin;
   }
 
-  get relay() {
-    const url = new URL(this.device.url);
-    return `${location.origin}/relay/${this.device.serverId || `${url.hostname}-${url.port || 47810}`}`;
-  }
+  get relay() { return `${location.origin}/relay/${this.relayTarget || this.relayTargets[0]}`; }
+
+  get relayTargets() { return relayTargets(this.device.serverId, this.device.url); }
 
   get base() { return this.route === 'relay' ? this.relay : this.direct || this.relay; }
 
   get secure() { return this.base.startsWith('https:'); }
 
-  /** Picks direct or relayed access (only matters for a dashboard opened over HTTPS). */
-  async resolveRoute() {
-    if (this.route) return this.route;
-    if (location.protocol !== 'https:' || this.home || !this.relayAvailable) return (this.route = 'direct');
-    if (this.direct) {
-      try { await probe(this.direct, 4000); return (this.route = 'direct'); } catch { /* untrusted certificate or unreachable */ }
-    }
-    try { await probe(this.relay, 6000); return (this.route = 'relay'); } catch { /* not reachable either way */ }
-    return null;
+  /**
+   * Picks direct or relayed access: directly when this browser can reach the PC itself, through the PC that served
+   * the page otherwise. Over HTTPS that's when this browser doesn't trust the other PC's certificate; over plain HTTP
+   * when the browser can't reach it (another network, blocked). Every call that talks to the PC waits for this, the
+   * sign-in included: until it's decided, `base` is the direct address, which fails for an untrusted certificate.
+   */
+  resolveRoute() {
+    if (this.route) return Promise.resolve(this.route);
+    if (this.home || !this.relayAvailable) return Promise.resolve(this.route = 'direct');
+    // One decision at a time: the sign-in and the connection may both ask.
+    this.resolving ||= (async () => {
+      if (this.direct) {
+        try { await probe(this.direct, 4000); return (this.route = 'direct'); } catch { /* untrusted certificate or unreachable */ }
+      }
+      try {
+        const { target } = await probeRelay(this.relayTargets, 6000);
+        this.relayTarget = target;
+        return (this.route = 'relay');
+      } catch { return null; /* not reachable either way */ }
+    })().finally(() => { this.resolving = null; });
+    return this.resolving;
+  }
+
+  /** Decide again next time (a certificate may have been trusted, the relay gone, or the PC moved). */
+  forgetRoute() {
+    if (this.home) return;
+    this.route = null;
+    this.relayTarget = null;
   }
 
   info() { return probe(this.base); }
 
   async login(password) {
-    const r = await fetch(this.base + '/api/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password }),
-    });
+    let r;
+    try {
+      await this.resolveRoute();
+      r = await fetch(this.base + '/api/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+    } catch (ex) {
+      if (!unreachable(ex)) throw ex;
+      this.forgetRoute();
+      throw new Error(`Can't reach ${this.device.name}. Check that it's switched on and SYSCOM is running there, then try again.`);
+    }
     if (r.status === 429) throw new Error(`Too many attempts. Try again in ${r.headers.get('retry-after') || 'a few'} seconds.`);
-    if (!r.ok) throw new Error('Wrong password.');
+    if (r.status === 401) throw new Error('Wrong password.');
+    if (!r.ok) {
+      const why = (await r.json().catch(() => null))?.message;
+      if (r.status !== 404 && r.status !== 502) throw new Error(why || `Sign-in failed (HTTP ${r.status}).`);
+      // The relay answers for a PC it can't reach (404 unknown PC, 502 no answer).
+      this.forgetRoute();
+      throw new Error(`Can't reach ${this.device.name}${why ? ` (${why.replace(/\.$/, '')})` : ''}. Try again in a moment.`);
+    }
     const { token } = await r.json();
     this.device.token = token;
     this.device.tokenAt = Date.now();
@@ -97,7 +155,7 @@ export class Connection extends EventTarget {
   }
 
   async peers() {
-    if (!this.device.token) return [];
+    if (!this.device.token || this.status !== 'online') return [];
     const r = await fetch(this.base + '/api/peers', { headers: { authorization: 'Bearer ' + this.device.token } });
     return r.ok ? r.json() : [];
   }
@@ -105,6 +163,7 @@ export class Connection extends EventTarget {
   /** Signed-in API call; a rejected token means signing in again. */
   async api(path, options = {}) {
     if (!this.device.token) throw new Error('Not signed in.');
+    await this.resolveRoute();
     const r = await fetch(this.base + path, {
       cache: 'no-store',
       ...options,
@@ -126,12 +185,14 @@ export class Connection extends EventTarget {
 
   /** The dashboard's background picture as a Blob, or null. */
   async loadBackground() {
+    await this.resolveRoute();
     const r = await fetch(this.base + '/api/dashboard/background', { headers: { authorization: 'Bearer ' + this.device.token } });
     return r.ok ? r.blob() : null;
   }
 
   /** Stores a picture as the background; resolves to its id. */
   async saveBackground(blob) {
+    await this.resolveRoute();
     const r = await fetch(this.base + '/api/dashboard/background', {
       method: 'PUT', body: blob, headers: { authorization: 'Bearer ' + this.device.token, 'content-type': blob.type },
     });
@@ -178,7 +239,7 @@ export class Connection extends EventTarget {
         return;
       }
       this.setStatus('offline');
-      this.route = null;   // decide again next time (a certificate may have been trusted, or the relay gone)
+      this.forgetRoute();
       const delay = Math.min(30000, 1000 * 2 ** this.retry++);
       this.timer = setTimeout(() => this.connect(), delay);
     };

@@ -63,16 +63,14 @@ internal sealed class PhoneSetupForm : Form
         }
         else
         {
+            // Picking an address draws its code. With a single address (a laptop on Wi-Fi only, say) the list stays
+            // hidden, but it still has to be picked below, or the window shows a blank code.
+            _address.Items.AddRange(addresses.Cast<object>().ToArray());
+            _address.SelectedIndexChanged += (_, _) => ShowCode();
             if (addresses.Count > 1)
             {
                 layout.Controls.Add(new Label { Text = "Network address", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
-                _address.Items.AddRange(addresses.Cast<object>().ToArray());
-                _address.SelectedIndexChanged += (_, _) => ShowCode();
                 layout.Controls.Add(_address);
-            }
-            else
-            {
-                _address.Items.Add(addresses[0]);
             }
             layout.Controls.Add(_qr);
             _link.LinkClicked += (_, _) => Process.Start(new ProcessStartInfo(_link.Text) { UseShellExecute = true });
@@ -140,6 +138,7 @@ internal sealed class PhoneSetupForm : Form
     private static Label Wrapped(string text, int width, Color? color = null) => new()
     {
         Text = text,
+        UseMnemonic = false,   // shows "Privacy & Security" as written, not as an underlined S
         AutoSize = true,
         MaximumSize = new Size(width, 0),
         ForeColor = color ?? SystemColors.ControlText,

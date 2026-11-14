@@ -2,7 +2,7 @@ import {
   load, save, normalizeDevice, normalizeLayouts, normalizeDash, normalizeLook, normalizeItems, normalizeUrl, uid,
   INTERVALS, DEFAULT_INTERVAL, MIN_INTERVAL, MAX_SAVED, LOOK_DEFAULTS, layoutMode, setLayoutMode, adoptPhoneView, layoutItems,
 } from './store.js';
-import { Connection, probe } from './connection.js';
+import { Connection, probe, probeRelay, relayTargets, unreachable } from './connection.js';
 import {
   createWidget, defaultsFor, suggest, COLORS, unitChoices, unitFactor, unitLabel, decimalsFor, totalFor, effectiveMaxFrom, displayUnit,
   isSection, defaultSize, positionsFor, defaultPosition, GAUGE_STYLES, MAX_W, MAX_H, format, thicknessOf, pct,
@@ -119,13 +119,19 @@ async function addDevice(url, { quiet = false, id = null } = {}) {
   const target = new URL(normalized);
   let info;
   let route = 'direct';
+  let relayTarget = null;
   try {
     info = await probe(normalized);
   } catch (ex) {
-    if (location.protocol !== 'https:' || !homeId) throw ex;
-    // An HTTPS address typed or found → that PC's plain HTTP port, which the relay talks to.
+    if (!homeId) throw ex;
+    // An HTTPS address typed or found → that PC's plain HTTP port, which the relay talks to. A PC found on the
+    // network is asked for by its id first, then by its address (in case this PC hasn't heard from it lately).
     const httpPort = target.port === '47812' || !target.port ? 47810 : Number(target.port);
-    try { info = await probe(`${location.origin}/relay/${id || `${target.hostname}-${httpPort}`}`); } catch { throw ex; }
+    try {
+      ({ info, target: relayTarget } = await probeRelay(relayTargets(id, `http://${target.hostname}:${httpPort}`)));
+    } catch {
+      throw ex;
+    }
     route = 'relay';
   }
   // Store the plain HTTP address plus the HTTPS port; the connection picks whichever this page needs.
@@ -142,7 +148,7 @@ async function addDevice(url, { quiet = false, id = null } = {}) {
   devicesChanged();
   renderPages();
   const conn = connectionFor(dev);
-  if (!conn.home) conn.route = route;
+  if (!conn.home) { conn.route = route; conn.relayTarget = relayTarget; }
   conn.connect();
   if (!quiet) goTo(state.devices.length - 1);
   return dev;
@@ -1551,7 +1557,7 @@ $('#add-device').onsubmit = async (e) => {
 };
 
 function showAddError(ex) {
-  $('#add-error').textContent = ex instanceof TypeError || ex?.name === 'TimeoutError' || ex?.name === 'AbortError'
+  $('#add-error').textContent = unreachable(ex)
     ? 'Could not reach that address. Check the IP and port, and that SYSCOM is running there.'
     : ex.message;
   $('#add-error').hidden = false;
