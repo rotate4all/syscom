@@ -8,6 +8,28 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.18.4] - 2026-11-14
+
+### Fixed
+- **Signing in to another PC failed with "Failed to fetch"** on a dashboard opened over HTTPS (the phone app, or
+  `https://` on a PC), when this browser doesn't trust that PC's own certificate. Adding the PC worked, through the
+  PC that served the page, but after the page was opened again the sign-in went straight to the other PC, which the
+  browser refuses without its certificate. The dashboard now decides how to reach a PC before it signs in, as it
+  already did before connecting, so the sign-in goes through the PC that served the page too. A sign-in that can't
+  reach the PC says so ("Can't reach …") instead of "Failed to fetch" or "Wrong password".
+- **Adding a PC found on the network could fail with "Could not reach that address"** when the PC that served the
+  page hadn't heard that PC's network announcement in the last 20 seconds (a laptop on Wi-Fi, say). The dashboard
+  now also asks for it by the address it was found at.
+- **The phone setup window showed no QR code on a PC with a single network address**, such as a laptop on Wi-Fi
+  only: the code was only drawn when an address was picked from the list, which is hidden when there is just one.
+  The window also wrote "Privacy  Security" for the iPhone setting; it says "Privacy & Security" now.
+
+### Changed
+- A PC can be added from an HTTPS dashboard by its name as well (`FOFO-PC`), when the PC that served the page has
+  found it on the network: the relay looks the name up among the SYSCOM PCs it has heard.
+- A plain HTTP dashboard that can't reach another PC itself goes through the PC that served the page, like an HTTPS
+  one.
+
 ## [0.18.3] - 2026-11-12
 
 ### Fixed

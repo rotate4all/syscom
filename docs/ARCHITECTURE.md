@@ -125,7 +125,9 @@ wins, announced over the WebSocket like the dashboard. Sign-ins and the theme st
 
 Mixed content rules make an HTTPS page talk HTTPS to every PC, and each PC has its own certificate authority. The
 dashboard tries a PC directly (works once its CA is trusted) and otherwise goes through the home PC's relay
-(`/relay/{id}/…`), which forwards to that PC's HTTP port on the LAN. The choice is made again on every reconnect.
+(`/relay/{id}/…`, or `/relay/{address}-{port}/…` when the home PC hasn't heard from it lately), which forwards to
+that PC's HTTP port on the LAN. A plain HTTP dashboard falls back to the relay the same way when it can't reach a PC
+itself. The choice is made before the first call to a PC, the sign-in included, and again on every reconnect.
 
 ## Tray app (`src/Syscom.Tray`)
 

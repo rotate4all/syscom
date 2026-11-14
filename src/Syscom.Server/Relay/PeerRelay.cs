@@ -17,9 +17,10 @@ namespace Syscom.Server.Relay;
 /// it; with it, trusting the first PC is enough.
 ///
 /// Safety: only SYSCOM's own sign-in, data and dashboard endpoints are forwarded (never /api/admin); the target is a
-/// server id this PC knows (LAN discovery or the device list) or a private-network IPv4 address that answers as a
-/// SYSCOM server; credentials pass through untouched (the target PC checks them), and nothing is cached. The relay
-/// gives no access the target PC wouldn't give directly: every target still asks for its own password.
+/// server id this PC knows (LAN discovery or the device list), the name of a SYSCOM PC found on the network, or a
+/// private-network IPv4 address that answers as a SYSCOM server; credentials pass through untouched (the target PC
+/// checks them), and nothing is cached. The relay gives no access the target PC wouldn't give directly: every target
+/// still asks for its own password.
 /// </summary>
 public static class PeerRelay
 {
@@ -72,8 +73,9 @@ public static class PeerRelay
     }
 
     /// <summary>
-    /// The target PC's HTTP address: a known server id (<paramref name="known"/>), or "a.b.c.d-port" on a private
-    /// network, which is only used once it answers as a SYSCOM server.
+    /// The target PC's HTTP address: a known server id, or "name-port" for a PC found on the network by that name
+    /// (both <paramref name="known"/>), or "a.b.c.d-port" on a private network, which is only used once it answers as
+    /// a SYSCOM server.
     /// </summary>
     private static Uri? Resolve(string target, LanDiscovery discovery, DeviceListStore devices, out bool known)
     {
@@ -85,7 +87,17 @@ public static class PeerRelay
         known = false;
         var dash = target.LastIndexOf('-');
         if (dash <= 0 || !int.TryParse(target[(dash + 1)..], out var port) || port is <= 0 or > 65535) return null;
-        if (!IPAddress.TryParse(target[..dash], out var ip) || !IsPrivate(ip)) return null;
+        var host = target[..dash];
+        if (!IPAddress.TryParse(host, out var ip))
+        {
+            // A PC's name, as typed ("FOFO-PC", "fofo-pc.local"): a SYSCOM PC found on the network with that name.
+            var name = host.Split('.')[0];
+            known = true;
+            return discovery.Peers.FirstOrDefault(p => p.Port == port && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) is { } named
+                ? new Uri(named.Url)
+                : null;
+        }
+        if (!IsPrivate(ip)) return null;
         return new Uri($"http://{ip}:{port}");
     }
 

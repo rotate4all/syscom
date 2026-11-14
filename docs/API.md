@@ -1071,8 +1071,11 @@ have to trust every PC's certificate. Instead, the dashboard first tries a PC di
 through the PC that served it: `/relay/{pc}/api/info`, `/relay/{pc}/ws?token=…` and so on are forwarded to that PC's
 plain HTTP port on the LAN, WebSockets included.
 
-- `{pc}` is a server id this PC knows (heard on the LAN, or in its device list), or `a.b.c.d-port` for a
+- `{pc}` is a server id this PC knows (heard on the LAN, or in its device list), `name-port` for a SYSCOM PC heard
+  on the LAN under that name (`FOFO-PC-47810`; a domain such as `.local` is ignored), or `a.b.c.d-port` for a
   private-network IPv4 address (10/8, 172.16/12, 192.168/16, 169.254/16) that answers `/api/info` as a SYSCOM server.
+  The dashboard asks by server id first and by the address it added the PC with next, so a PC this PC hasn't heard
+  from lately is still reached.
 - Only these paths are forwarded: `ws`, `api/info`, `api/health`, `api/login`, `api/token`, `api/sensors`,
   `api/sensors/…`, `api/values`, `api/categories`, `api/history`, `api/peers`, `api/dashboard`,
   `api/dashboard/background`, `api/dashboard/readings`, `api/widgets/…`, `api/sections/…`, `api/devices`,
