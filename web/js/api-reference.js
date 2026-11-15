@@ -176,19 +176,19 @@ export const GROUPS = [
       {
         id: 'layout', method: 'GET', path: '/api/dashboard', access: 'read',
         summary: 'The dashboard as stored (the layouts, not the readings)',
-        about: '`{ rev, widgets (desktop layout), phone (null = same as desktop), look, saved, current }`; `rev` 0 = nothing saved yet. Each card is `{ id, sensor, type, w, h, label, min, max, thresholds, … }`, each section `{ id, kind: "section", title }`.',
+        about: '`{ rev, widgets (desktop layout), phone (null = same as desktop), osd (the OSD\'s readings), look, osdLook (the OSD\'s settings), saved, current }`; `rev` 0 = nothing saved yet. Each card is `{ id, sensor, type, w, h, label, min, max, thresholds, … }`, each section `{ id, kind: "section", title }`, each OSD reading `{ id, sensor, label, pos, stack, unit, decimals, thresholds, color, size, hideUnit }`.',
         call: () => ({ path: '/api/dashboard' }),
         pick: {
           python: 'print(len(data["widgets"]), "cards and sections on the desktop layout")',
           javascript: 'console.log(data.widgets.length, "cards and sections on the desktop layout");',
           powershell: '"{0} cards and sections on the desktop layout" -f $data.widgets.Count',
         },
-        response: () => json({ rev: 12, updated: 1793430459731, widgets: ['…'], phone: null, look: { bg: 'none', alpha: 100, round: 100, anim: 'smooth' }, saved: [], current: {} }),
+        response: () => json({ rev: 12, updated: 1793430459731, widgets: ['…'], phone: null, osd: ['…'], look: { bg: 'none', alpha: 100, round: 100, anim: 'smooth' }, osdLook: { font: 'Segoe UI', size: 18, hotkey: 'Ctrl+Shift+S', '…': '…' }, saved: [], current: {} }),
       },
       {
         id: 'save-layout', method: 'PUT', path: '/api/dashboard', access: 'full',
         summary: 'Replace the dashboard',
-        about: 'Body: `{ widgets, phone, look, saved, current }` as `GET /api/dashboard` returns them (max 2 MB). Answers `{ rev }`; open dashboards reload it at once. Read it first and send it back changed, so nothing else is lost.',
+        about: 'Body: `{ widgets, phone, osd, look, osdLook, saved, current }` as `GET /api/dashboard` returns them (max 2 MB); leave out `osd` and `osdLook` to keep the OSD as it is. Answers `{ rev }`; open dashboards reload it at once. Read it first and send it back changed, so nothing else is lost.',
         call: () => ({ path: '/api/dashboard' }),
         // Read, change, send back: the whole dashboard goes in one piece.
         examples: (c, url) => ({
@@ -286,6 +286,74 @@ export const GROUPS = [
           browser: null,
         }),
         response: () => json({ id: '5d41402abc4b2a76' }),
+      },
+    ],
+  },
+  {
+    title: 'On-screen display',
+    about: 'The OSD: readings the SYSCOM tray app draws over everything on the PC\'s own screen, games included (windowed, borderless and most full screen games; not games in true exclusive full screen, mostly older ones). Lay it out in the dashboard\'s OSD view; its readings and settings are `osd` and `osdLook` in the dashboard (`GET /api/dashboard`).',
+    endpoints: [
+      {
+        id: 'osd', method: 'GET', path: '/api/osd', access: 'read',
+        summary: 'The OSD, with what each reading shows now',
+        about: 'Whether it shows, its shortcut, what the tray app reports (running, whether the shortcut works, the screens), its settings and each reading: where it goes (`pos`: `tl`, `tc`, `tr`, `ml`, `mr`, `bl`, `bc`, `br`; `stack`: `below` the reading before it in that place, or `beside` it), its label, value and text as the OSD shows them.',
+        params: [['readings', '`false` leaves the readings out (`elements` is `null`)']],
+        call: () => ({ path: '/api/osd' }),
+        pick: {
+          python: 'print("shown" if data["shown"] else "hidden")\nfor e in data["elements"]:\n    print(e["pos"], e["label"], e["text"])',
+          javascript: 'console.log(data.shown ? "shown" : "hidden");\nfor (const e of data.elements) console.log(e.pos, e.label, e.text);',
+          powershell: '"OSD shown: {0}" -f $data.shown\n$data.elements | Format-Table pos, label, text',
+        },
+        response: (c) => json({
+          pc: c.pc, shown: true, hotkey: 'Ctrl+Shift+S',
+          tray: { running: true, hotkeyRegistered: true, hotkeyError: null, screens: [{ id: '\\\\.\\DISPLAY1', name: 'Screen 1', width: 2560, height: 1440, scale: 1.25, primary: true }] },
+          look: { font: 'Segoe UI', bold: true, size: 18, color: '#ffffff', labelColor: '#9cc3ff', transparency: 0, backdrop: 40, backdropColor: '#000000', outline: 'outline', margin: 16, screen: null, hotkey: 'Ctrl+Shift+S', interval: 1000 },
+          t: 1793430459731,
+          elements: [{ id: 'k3f9x2', pos: 'tl', stack: 'below', label: 'CPU', sensor: { id: c.sensor.id, name: c.sensor.name, hardware: c.sensor.hardware, unit: c.sensor.unit, available: true }, value: 61.5, unit: '°C', number: '62', text: '62 °C', color: null, level: null }],
+        }),
+      },
+      {
+        id: 'osd-toggle', method: 'POST', path: '/api/osd/toggle', access: 'full',
+        summary: 'Show or hide the OSD',
+        about: '`/api/osd/show` shows it, `/api/osd/hide` hides it, `/api/osd/toggle` switches it, like its shortcut. No body; answers `{ shown }`. It stays that way after a restart. The tray app on the PC draws it while it runs.',
+        call: () => ({ path: '/api/osd/toggle' }),
+        examples: (c, url) => ({
+          curl: [
+            `curl -X POST -H "${KEY_HEADER}: ${c.key}" "${url}"`,
+            `curl -X POST -H "${KEY_HEADER}: ${c.key}" "${url.replace(/toggle$/, 'show')}"   # or /hide`,
+          ].join('\n'),
+          powershell: [
+            `$data = Invoke-RestMethod -Method Post -Uri "${url}" -Headers @{ "${KEY_HEADER}" = "${c.key}" }`,
+            '"OSD shown: {0}" -f $data.shown',
+          ].join('\n'),
+          python: [
+            'import json, urllib.request',
+            '',
+            `req = urllib.request.Request("${url}", method="POST", headers={"${KEY_HEADER}": "${c.key}"})`,
+            'with urllib.request.urlopen(req) as r:',
+            '    data = json.load(r)',
+            'print("shown" if data["shown"] else "hidden")',
+          ].join('\n'),
+          javascript: [
+            `const r = await fetch("${url}", { method: "POST", headers: { "${KEY_HEADER}": "${c.key}" } });`,
+            'const data = await r.json();',
+            'console.log(data.shown ? "shown" : "hidden");',
+          ].join('\n'),
+          browser: null,
+        }),
+        response: () => json({ shown: true }),
+      },
+      {
+        id: 'osd-fonts', method: 'GET', path: '/api/osd/fonts', access: 'read',
+        summary: 'The fonts the OSD can use',
+        about: 'The fonts installed on the PC, as its tray app reports them (`[]` until it has); `osdLook.font` takes one of these names.',
+        call: () => ({ path: '/api/osd/fonts' }),
+        pick: {
+          python: 'print(len(data["fonts"]), "fonts")',
+          javascript: 'console.log(data.fonts.length, "fonts");',
+          powershell: '"{0} fonts" -f $data.fonts.Count',
+        },
+        response: () => json({ fonts: ['Arial', 'Bahnschrift', 'Consolas', 'Segoe UI', '…'] }),
       },
     ],
   },
@@ -488,4 +556,5 @@ export const INTRO = [
 export const STREAM_ABOUT = [
   'For live readings, open a WebSocket to `/ws?key=…` (the key in the address: browsers can\'t send headers on WebSockets) and say which sensors you want and how often (ms, 500 to 60000). The PC first sends its sensor list (`catalog`), confirms your subscription (`subscribed`, with the order of the values), then sends a `data` frame every interval: `{ "type": "data", "t": …, "v": [ … ] }`, values in that order.',
   'Several rates on one connection: `{ "type": "subscribe", "streams": [ { "id": 1, "interval": 500, "sensors": [ … ] }, { "id": 2, "interval": 5000, "sensors": [ … ] } ] }`; each `data` frame then names its stream in `"s"`. Omit `sensors` for every sensor. A bad key closes the socket with code 4401.',
+  'The PC also tells when its on-screen display was shown or hidden (by its shortcut, the tray menu or the API): `{ "type": "osd", "rev": …, "shown": true }`, once on connect and after each change.',
 ];

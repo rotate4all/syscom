@@ -28,7 +28,8 @@ Windows service, or as a console app for development.
 | --- | --- | --- |
 | `SensorHub` | `Sensors/SensorHub.cs` | One shared polling loop for all clients. It runs at the fastest interval any connected client asked for (never below `MinIntervalMs`, 500 by default). With nobody connected it samples every `HistorySampleMs` (2 s) for the history, or **stops touching hardware** when `HistoryEnabled` is off. Each read runs on a pool thread and is waited for, never two at a time; a watchdog restarts SYSCOM (through the updater, like the tray app's Restart server) when a read hasn't finished after 10 s (3 minutes for the first), so a hardware driver that stops answering doesn't leave the sensors stuck. |
 | `HistoryStore` | `History/HistoryStore.cs` | 30 days of every sensor: readings averaged into 1-minute buckets (kept 3 days) and 10-minute buckets (kept 31 days), with each bucket's lowest and highest reading. A closed bucket is one fixed-size record appended to the file for its tier and day, so writing is one sequential append a minute and reading a sensor is a seek per record. About 75 MB for 600 sensors. Queries return at most 1500 evenly spaced points. |
-| `DashboardStore` | `Dashboards/DashboardStore.cs` | This PC's dashboard (`dashboard.json`): desktop and phone layouts, appearance, saved layouts. Shared by every browser that signs in. Each save bumps a revision; open WebSockets are told (`layout` message) and reload it. |
+| `DashboardStore` | `Dashboards/DashboardStore.cs` | This PC's dashboard (`dashboard.json`): desktop and phone layouts, the OSD's readings (`osd`) and settings (`osdLook`), appearance, saved layouts. Shared by every browser that signs in. Each save bumps a revision; open WebSockets are told (`layout` message) and reload it. A save without `osd` / `osdLook` keeps them. |
+| `OsdService`, `OsdReadings`, `OsdApi` | `Osd/` | The on-screen display: whether it shows (`osd-state.json`, kept over restarts), what the tray app last reported (shortcut working, screens, fonts; it counts as running while it asks at least every 6 s), and the readings formatted as the OSD shows them (label, number, unit, threshold colour), grouped by place and line. While it shows and the tray app asks, it holds a lease on the hub at the OSD's refresh rate, like a dashboard; hidden, nothing is read for it. Changes bump a revision, sent to open dashboards (`osd` message). `/api/osd…` for the dashboard and scripts, `/api/admin/osd…` for the tray app. |
 | `BackgroundStore` | `Dashboards/BackgroundStore.cs` | The dashboard's background picture (`background.<ext>`, 8 MB max, checked to be an image); its id (a hash) goes in the dashboard's `look`. |
 | `DeviceListStore` | `Dashboards/DeviceListStore.cs` | The list of PCs for the dashboards this PC serves (`devices.json`), so every address of this PC and every browser finds the same PCs. Revisioned like the dashboard (`devices` message). |
 | `PeerRelay` | `Relay/PeerRelay.cs` | `/relay/{pc}/…`: forwards SYSCOM's own endpoints (HTTP and WebSocket) to another SYSCOM PC on the LAN, so an HTTPS dashboard reaches PCs whose certificate the browser doesn't trust (see [API.md](API.md#relay-relaypc)). |
@@ -79,6 +80,7 @@ Plain ES modules, no framework and no build step. About 40 KB uncompressed.
 | `js/widgets.js` | Cards: gauges (SVG, five styles), horizontal and vertical bars (CSS), graph (canvas), value; device icons; value and unit positions, value sizes; threshold colouring; smooth motion (one shared animation loop for numbers, CSS transitions, gliding graphs); suggested layout |
 | `js/dnd.js` | Edit mode drag and drop (cards and whole sections) and corner resizing, with pointer events (mouse, pen and touch) |
 | `js/history.js` | History chart (canvas): average line, lowest-to-highest band, thresholds, crosshair tooltip |
+| `js/osd.js` | The on-screen display: its readings and settings (normalising, defaults, suggested OSD), the preview of the PC's screen, shortcut names |
 | `js/store.js` | Device list, theme and a cache of each PC's dashboard in `localStorage`; layout and appearance normalising |
 | `js/transfer.js` | Layout files: export one layout of one PC, import it into any PC by matching its readings to that PC's sensors |
 | `sw.js`, `manifest.webmanifest` | App shell cache and install metadata (PWA) |
@@ -103,7 +105,7 @@ to every sensor (a subscribe message without a list) so the sensor list can show
 
 ### Where the dashboard lives
 
-Each PC's layouts are saved on that PC (`PUT /api/dashboard` with `{ widgets, phone, look, saved, current }`) and
+Each PC's layouts are saved on that PC (`PUT /api/dashboard` with `{ widgets, phone, osd, look, osdLook, saved, current }`) and
 cached in the browser,
 so they show instantly and work offline. `widgets` is the desktop layout; `phone` is the phone layout, shown on
 screens narrower than 700 px and in the phone preview. While `phone` is null, phones show the desktop layout; the
@@ -111,8 +113,9 @@ first change made on a phone (or in the preview) turns a copy of it into the pho
 layout" in edit mode sets it back to null. Graph history is kept per page, so rebuilt cards keep their graphs. Edits made while the PC is unreachable are kept and sent on the next connection; otherwise the PC's
 copy wins. The first browser to connect to a PC without a saved layout uploads its own. `look` is the PC's
 appearance (background, card opacity, rounding, animations), `saved` its named layouts and `current` which saved
-layout each of the two layouts was loaded from. Undo and redo keep the last 5 states of the layout on screen, in
-the page only.
+layout each of the three layouts was loaded from. `osd` is the on-screen display's readings (each with a place,
+`pos`, and `stack`: under or beside the reading before it there) and `osdLook` its settings. Undo and redo keep the
+last 5 states of the layout on screen, in the page only.
 
 ### The list of PCs
 
@@ -143,6 +146,18 @@ One copy runs at a time (`Global\SYSCOM.Tray` mutex); starting it again (Start m
 runs, its buttons stay disabled until the updater's result arrives. When an update has replaced its files and the
 server is back on that version, it starts the new copy (`--restarted`, which waits for the old one to exit) and
 exits. It also creates the Start menu entries when they are missing and deletes its own `*.syscom-old` leftovers.
+
+It draws the **on-screen display** (`Osd/`), since the service runs in session 0 and can't draw on the user's
+screen. Hidden, it asks the service every 1.5 s whether that changed (no readings, so no sensors are read); shown,
+it asks for the formatted readings at the OSD's refresh rate and draws each place's group with GDI+ into a layered
+window (`UpdateLayeredWindow`, per-pixel alpha): topmost, click-through (`WS_EX_TRANSPARENT`), never activated
+(`WS_EX_NOACTIVATE`, `MA_NOACTIVATE`), not in the taskbar or Alt+Tab. It re-asserts topmost with every frame, scales
+with the screen's DPI, and keeps each number column as wide as it has been, so groups don't jitter. The shortcut is
+a `RegisterHotKey` on a message-only window (tried again every 30 s when another app holds it). It reports the
+shortcut's state, the screens and the installed fonts to the service, for the dashboard. Windowed, borderless and
+flip-model full screen games (all of DirectX 12, and DirectX 11 under Windows' fullscreen optimizations) are
+composed by DWM, so the windows show over them. Games in true exclusive full screen bypass DWM and can't be drawn
+over without hooking into them, which SYSCOM doesn't do.
 
 At sign-in it often starts before Explorer has made the taskbar. Its icon then comes back when Explorer announces
 the taskbar ("TaskbarCreated", which an elevated app must let through: `Taskbar.cs`), and if that message never

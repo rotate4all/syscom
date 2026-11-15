@@ -1,4 +1,4 @@
-// Layout files: export one layout (desktop or phone) of one PC, and import a layout into any PC, matching each
+// Layout files: export one layout (desktop, phone or OSD) of one PC, and import a layout into any PC, matching each
 // reading to that PC's sensors. Plain functions, no DOM.
 import { isSection, extrasOf } from './widgets.js';
 
@@ -17,11 +17,11 @@ function sensorIds(items) {
 }
 
 /**
- * A layout file: { app, kind, version, exported, source: { name, serverId }, layout: 'desktop'|'phone', name?,
- * items, sensors: { id: { name, hardware, hardwareType, type, unit } } }. The sensors' descriptions let another PC
- * find its own matching readings.
+ * A layout file: { app, kind, version, exported, source: { name, serverId }, layout: 'desktop'|'phone'|'osd', name?,
+ * items, look? (an OSD's settings), sensors: { id: { name, hardware, hardwareType, type, unit } } }. The sensors'
+ * descriptions let another PC find its own matching readings.
  */
-export function exportLayout({ dev, which, items, name = null, catalog = [] }) {
+export function exportLayout({ dev, which, items, name = null, catalog = [], look = null }) {
   const byId = new Map(catalog.map((s) => [s.id, s]));
   const sensors = {};
   for (const id of sensorIds(items)) {
@@ -31,7 +31,7 @@ export function exportLayout({ dev, which, items, name = null, catalog = [] }) {
   return {
     app: 'syscom', kind: 'layout', version: FILE_VERSION, exported: new Date().toISOString(),
     source: { name: dev.name, serverId: dev.serverId }, layout: which, ...(name ? { name } : {}),
-    items: structuredClone(items), sensors,
+    items: structuredClone(items), ...(look ? { look: structuredClone(look) } : {}), sensors,
   };
 }
 
@@ -43,12 +43,16 @@ export function fileName(...parts) {
 /**
  * Reads a layout file for one PC's layout. Accepts this version's files and the older whole-browser backups
  * ({ devices: [...] }, which carried every PC's layouts): from those it takes the PC with the same server id, else
- * the first one. Returns { items, sensors (descriptions or null), from (source PC name), which (layout in the file) }.
+ * the first one. Returns { items, sensors (descriptions or null), from (source PC name), which (layout in the file),
+ * look (an OSD's settings, or null) }.
  */
 export function readLayoutFile(data, { serverId, which }) {
   if (!data || data.app !== 'syscom') throw new Error('Not a SYSCOM layout file.');
   if (Array.isArray(data.items)) {
-    return { items: data.items, sensors: data.sensors || null, from: data.source?.name || 'another PC', which: data.layout || 'desktop', name: data.name || null };
+    return {
+      items: data.items, sensors: data.sensors || null, from: data.source?.name || 'another PC', which: data.layout || 'desktop',
+      name: data.name || null, look: data.look && typeof data.look === 'object' ? data.look : null,
+    };
   }
   if (Array.isArray(data.devices) && data.devices.length) {
     const d = data.devices.find((x) => serverId && x.serverId === serverId) || data.devices[0];
@@ -56,7 +60,7 @@ export function readLayoutFile(data, { serverId, which }) {
     const phone = d.layouts?.phone;
     const items = which === 'phone' && Array.isArray(phone) ? phone : desktop;
     if (!Array.isArray(items)) throw new Error('That file has no layout in it.');
-    return { items, sensors: null, from: d.name || 'another PC', which: items === phone ? 'phone' : 'desktop', name: null };
+    return { items, sensors: null, from: d.name || 'another PC', which: items === phone ? 'phone' : 'desktop', name: null, look: null };
   }
   throw new Error('That file has no layout in it.');
 }

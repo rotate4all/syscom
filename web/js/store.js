@@ -2,6 +2,7 @@
 // here so it shows instantly and works offline); the device list is also kept on the PC that serves the dashboard,
 // so another address of the same PC (localhost, its IP, https) or another browser finds it again.
 import { normalizeItem, pct } from './widgets.js';
+import { normalizeOsdItems, normalizeOsdLook } from './osd.js';
 
 const KEY = 'syscom.v1';
 
@@ -18,6 +19,8 @@ export function load() {
     awake: ['auto', 'on', 'off'].includes(saved.awake) ? saved.awake : 'auto',
     active: saved.active || 0,
     preview: !!saved.preview,
+    osdView: !!saved.osdView,           // the OSD view (the on-screen display each PC draws over games)
+    osdBg: ['scene', 'dark', 'light'].includes(saved.osdBg) ? saved.osdBg : 'scene',
     fullscreen: !!saved.fullscreen,
     collapsed: saved.collapsed && typeof saved.collapsed === 'object' ? saved.collapsed : {},
     devices: Array.isArray(saved.devices) ? saved.devices.map(normalizeDevice) : [],
@@ -32,10 +35,11 @@ export function save(state) {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* storage unavailable */ }
 }
 
-// ---- desktop and phone layouts
-// Each PC keeps two independent layouts. dev.widgets is the one for this screen: the phone layout on phones and in
-// phone preview, else the desktop one. Until the phone layout is changed on its own it follows the desktop layout;
-// edits made on a phone then go to a copy, which becomes the phone layout when saved (adoptPhoneView).
+// ---- desktop, phone and OSD layouts
+// Each PC keeps three independent layouts. dev.widgets is the one for this screen: the phone layout on phones and in
+// phone preview, the OSD's readings in the OSD view, else the desktop one. Until the phone layout is changed on its
+// own it follows the desktop layout; edits made on a phone then go to a copy, which becomes the phone layout when
+// saved (adoptPhoneView). The OSD has its own readings from the start (empty until some are added).
 let mode = 'desktop';
 let phoneViews = new WeakMap();   // device → { from: desktop array, items: its copy }
 
@@ -56,8 +60,9 @@ export function adoptPhoneView(dev) {
   if (mode === 'phone' && !dev.layouts.phone) dev.layouts.phone = phoneView(dev);
 }
 
-/** The items of one of a PC's two layouts ('desktop' or 'phone'; the phone one follows the desktop one until split). */
+/** The items of one of a PC's layouts ('desktop', 'phone' (follows the desktop one until split) or 'osd'). */
 export function layoutItems(dev, which) {
+  if (which === 'osd') return dev.layouts.osd;
   return which === 'phone' ? dev.layouts.phone || dev.layouts.desktop : dev.layouts.desktop;
 }
 
@@ -65,15 +70,21 @@ function withWidgets(dev) {
   Object.defineProperty(dev, 'widgets', {
     enumerable: false,   // not stored; dev.layouts is
     configurable: true,
-    get() { return mode === 'phone' ? dev.layouts.phone || phoneView(dev) : dev.layouts.desktop; },
-    set(items) { if (mode === 'phone') dev.layouts.phone = items; else dev.layouts.desktop = items; },
+    get() { return mode === 'osd' ? dev.layouts.osd : mode === 'phone' ? dev.layouts.phone || phoneView(dev) : dev.layouts.desktop; },
+    set(items) {
+      if (mode === 'osd') dev.layouts.osd = items;
+      else if (mode === 'phone') dev.layouts.phone = items;
+      else dev.layouts.desktop = items;
+    },
   });
   return dev;
 }
 
-export function normalizeLayouts(desktop, phone) {
-  return { desktop: normalizeItems(desktop), phone: Array.isArray(phone) ? normalizeItems(phone) : null };
+export function normalizeLayouts(desktop, phone, osd) {
+  return { desktop: normalizeItems(desktop), phone: Array.isArray(phone) ? normalizeItems(phone) : null, osd: withIds(normalizeOsdItems(osd)) };
 }
+
+const withIds = (items) => items.map((x) => (x.id ? x : { ...x, id: uid() }));
 
 // ---- the dashboard's appearance (one per PC, shared by its desktop and phone layouts)
 export const LOOK_DEFAULTS = Object.freeze({
@@ -105,26 +116,32 @@ export function normalizeLook(l) {
 // ---- saved layouts: named copies of a layout to switch between (kept on the PC with its dashboard)
 export const MAX_SAVED = 50;
 
+/** Saved layouts: { id, name, mode: desktop | phone | osd, items, savedAt } (an OSD one also keeps its look). */
 export function normalizeSaved(list) {
-  return (Array.isArray(list) ? list : []).filter((x) => x && Array.isArray(x.items)).slice(0, MAX_SAVED).map((x) => ({
-    id: typeof x.id === 'string' && x.id ? x.id : uid(),
-    name: String(x.name ?? 'Layout').slice(0, 60) || 'Layout',
-    mode: x.mode === 'phone' ? 'phone' : 'desktop',
-    items: normalizeItems(x.items),
-    savedAt: Number(x.savedAt) || 0,
-  }));
+  return (Array.isArray(list) ? list : []).filter((x) => x && Array.isArray(x.items)).slice(0, MAX_SAVED).map((x) => {
+    const mode = ['phone', 'osd'].includes(x.mode) ? x.mode : 'desktop';
+    return {
+      id: typeof x.id === 'string' && x.id ? x.id : uid(),
+      name: String(x.name ?? 'Layout').slice(0, 60) || 'Layout',
+      mode,
+      items: mode === 'osd' ? withIds(normalizeOsdItems(x.items)) : normalizeItems(x.items),
+      ...(mode === 'osd' ? { look: normalizeOsdLook(x.look) } : {}),
+      savedAt: Number(x.savedAt) || 0,
+    };
+  });
 }
 
 function normalizeCurrent(c) {
   const id = (v) => (typeof v === 'string' && v ? v : null);
-  return { desktop: id(c?.desktop), phone: id(c?.phone) };
+  return { desktop: id(c?.desktop), phone: id(c?.phone), osd: id(c?.osd) };
 }
 
 /** Everything of a PC's dashboard as stored on the PC (and cached here). */
 export function normalizeDash(d) {
   return {
-    layouts: normalizeLayouts(d?.layouts?.desktop ?? d?.widgets, d?.layouts?.phone ?? d?.phone),
+    layouts: normalizeLayouts(d?.layouts?.desktop ?? d?.widgets, d?.layouts?.phone ?? d?.phone, d?.layouts?.osd ?? d?.osd),
     look: normalizeLook(d?.look),
+    osdLook: normalizeOsdLook(d?.osdLook),
     saved: normalizeSaved(d?.saved),
     current: normalizeCurrent(d?.current),
   };

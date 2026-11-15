@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Net.WebSockets;
 using System.Text.Json;
 using Syscom.Server.Dashboards;
+using Syscom.Server.Osd;
 using Syscom.Server.Sensors;
 
 namespace Syscom.Server.Streaming;
@@ -18,6 +19,8 @@ namespace Syscom.Server.Streaming;
 ///   server → {"type":"data","s":1,"t":unixMs,"v":[...]}                 (values of stream 1, in its order)
 ///   server → {"type":"layout","rev":n}       the PC's dashboard changed (sent on connect too); GET /api/dashboard
 ///   server → {"type":"devices","rev":n}      the PC's device list changed (sent on connect too); GET /api/devices
+///   server → {"type":"osd","rev":n,"shown":b} the on-screen display was shown or hidden, or the tray app's report
+///                                            changed (sent on connect too); GET /api/osd?readings=false
 /// </summary>
 public sealed class MetricsSession
 {
@@ -27,6 +30,7 @@ public sealed class MetricsSession
     private readonly SensorHub _hub;
     private readonly DashboardStore _dashboards;
     private readonly DeviceListStore _devices;
+    private readonly OsdService _osd;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     /// <summary>What the client asked for: one or more sets of sensors, each at its own interval.</summary>
@@ -45,13 +49,15 @@ public sealed class MetricsSession
     private int _sentCatalogVersion = -1;
     private int _sentLayoutRev = -1;
     private int _sentDevicesRev = -1;
+    private int _sentOsdRev = -1;
 
-    public MetricsSession(WebSocket ws, SensorHub hub, DashboardStore dashboards, DeviceListStore devices)
+    public MetricsSession(WebSocket ws, SensorHub hub, DashboardStore dashboards, DeviceListStore devices, OsdService osd)
     {
         _ws = ws;
         _hub = hub;
         _dashboards = dashboards;
         _devices = devices;
+        _osd = osd;
     }
 
     /// <summary>
@@ -181,6 +187,7 @@ public sealed class MetricsSession
                 await SendCatalogIfChanged(ct);
                 await SendLayoutIfChanged(ct);
                 await SendDevicesIfChanged(ct);
+                await SendOsdIfChanged(ct);
                 nextMeta = now + MetaCheckMs;
             }
 
@@ -272,6 +279,15 @@ public sealed class MetricsSession
         if (rev == _sentDevicesRev) return;
         _sentDevicesRev = rev;
         await SendJson(w => { w.WriteString("type", "devices"); w.WriteNumber("rev", rev); }, ct);
+    }
+
+    private async Task SendOsdIfChanged(CancellationToken ct)
+    {
+        var rev = _osd.Rev;
+        if (rev == _sentOsdRev) return;
+        _sentOsdRev = rev;
+        var shown = _osd.Shown;
+        await SendJson(w => { w.WriteString("type", "osd"); w.WriteNumber("rev", rev); w.WriteBoolean("shown", shown); }, ct);
     }
 
     private async Task SendCatalogIfChanged(CancellationToken ct)

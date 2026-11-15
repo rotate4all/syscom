@@ -8,7 +8,10 @@ namespace Syscom.Server.Dashboards;
 /// <item>"widgets": the desktop layout (cards and sections); "phone": the phone layout (null = phones show the desktop one)</item>
 /// <item>"look": background, card opacity, corner rounding, animations (null = defaults)</item>
 /// <item>"saved": named layouts to switch between, [{ id, name, mode, items: [...] }]</item>
-/// <item>"current": which saved layout each of the two layouts was last loaded from or saved as</item>
+/// <item>"current": which saved layout each of the layouts was last loaded from or saved as</item>
+/// <item>"osd": the on-screen display's readings, which the tray app draws over games (null = none);
+/// "osdLook": its font, colours, places and shortcut (null = defaults). A save without these two keeps them, so a
+/// dashboard from before the OSD (another PC serving an older SYSCOM) can't wipe them.</item>
 /// </list>
 /// The server doesn't interpret the contents; it only checks the shape and size. Stored in dashboard.json next to
 /// config.json.
@@ -21,10 +24,10 @@ public sealed class DashboardStore
 
     private readonly string _path;
     private readonly object _lock = new();
-    private Saved _saved = new(0, 0, null, null, null, null, null);
+    private Saved _saved = new(0, 0, null, null, null, null, null, null, null);
 
     private sealed record Saved(int Rev, long Updated, JsonElement? Widgets, JsonElement? Phone, JsonElement? Look,
-        JsonElement? SavedLayouts, JsonElement? Current);
+        JsonElement? SavedLayouts, JsonElement? Current, JsonElement? Osd, JsonElement? OsdLook);
 
     public DashboardStore(string dataDir, ILogger<DashboardStore> log)
     {
@@ -42,7 +45,9 @@ public sealed class DashboardStore
                     Prop(root, "phone", JsonValueKind.Array),
                     Prop(root, "look", JsonValueKind.Object),
                     Prop(root, "saved", JsonValueKind.Array),
-                    Prop(root, "current", JsonValueKind.Object));
+                    Prop(root, "current", JsonValueKind.Object),
+                    Prop(root, "osd", JsonValueKind.Array),
+                    Prop(root, "osdLook", JsonValueKind.Object));
             }
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
@@ -60,7 +65,18 @@ public sealed class DashboardStore
     public object Get()
     {
         var s = Volatile.Read(ref _saved);
-        return new { rev = s.Rev, updated = s.Updated, widgets = s.Widgets, phone = s.Phone, look = s.Look, saved = s.SavedLayouts, current = s.Current };
+        return new
+        {
+            rev = s.Rev, updated = s.Updated, widgets = s.Widgets, phone = s.Phone, look = s.Look, saved = s.SavedLayouts,
+            current = s.Current, osd = s.Osd, osdLook = s.OsdLook,
+        };
+    }
+
+    /// <summary>The on-screen display: its readings (null = none yet) and settings (null = defaults).</summary>
+    public (JsonElement? Items, JsonElement? Look) Osd()
+    {
+        var s = Volatile.Read(ref _saved);
+        return (s.Osd, s.OsdLook);
     }
 
     /// <summary>The stored layouts as they are: desktop, phone (null = same as desktop) and the saved ones.</summary>
@@ -79,9 +95,12 @@ public sealed class DashboardStore
         if (Optional(body, "look", JsonValueKind.Object, out var look) is { } e2) return (null, e2);
         if (Optional(body, "saved", JsonValueKind.Array, out var saved) is { } e3) return (null, e3);
         if (Optional(body, "current", JsonValueKind.Object, out var current) is { } e4) return (null, e4);
+        if (Optional(body, "osd", JsonValueKind.Array, out var osd) is { } e5) return (null, e5);
+        if (Optional(body, "osdLook", JsonValueKind.Object, out var osdLook) is { } e6) return (null, e6);
 
         var lists = new List<JsonElement> { widgets };
         if (phone is { } pl) lists.Add(pl);
+        if (osd is { } ol) lists.Add(ol);
         if (saved is { } sl)
         {
             if (sl.GetArrayLength() > MaxSaved) return (null, $"At most {MaxSaved} saved layouts.");
@@ -100,12 +119,16 @@ public sealed class DashboardStore
 
         lock (_lock)
         {
+            // Not sent at all (rather than null): a dashboard that doesn't know about the OSD; keep it as it is.
+            var keepOsd = !body.TryGetProperty("osd", out _);
+            var keepOsdLook = !body.TryGetProperty("osdLook", out _);
             var next = new Saved(_saved.Rev + 1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), widgets.Clone(), phone?.Clone(),
-                look?.Clone(), saved?.Clone(), current?.Clone());
+                look?.Clone(), saved?.Clone(), current?.Clone(),
+                keepOsd ? _saved.Osd : osd?.Clone(), keepOsdLook ? _saved.OsdLook : osdLook?.Clone());
             var json = JsonSerializer.SerializeToUtf8Bytes(new
             {
                 rev = next.Rev, updated = next.Updated, widgets = next.Widgets, phone = next.Phone,
-                look = next.Look, saved = next.SavedLayouts, current = next.Current,
+                look = next.Look, saved = next.SavedLayouts, current = next.Current, osd = next.Osd, osdLook = next.OsdLook,
             });
             if (json.Length > MaxBytes) return (null, "The dashboard is too large.");
             JsonFile.WriteAtomic(_path, json);

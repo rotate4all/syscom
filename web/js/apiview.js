@@ -19,15 +19,15 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const md = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
 
 /**
- * Opens the API window for a PC. scope: { kind: 'widget' | 'section' | 'dashboard', item } (what it was opened
+ * Opens the API window for a PC. scope: { kind: 'widget' | 'section' | 'dashboard' | 'osd', item } (what it was opened
  * from); tab: 'this' | 'keys' | 'ref'; layout: 'phone' when the phone layout (a separate one) is on screen.
  */
 export function openApi(dev, conn, { scope = { kind: 'dashboard' }, tab = 'this', layout } = {}) {
   view = { dev, conn, scope, tab, layout };
   $('#api-sub').textContent = dev.name;
   $('#api-title').textContent = scope.kind === 'widget' ? `API · ${scope.item.label || conn.sensors.get(scope.item.sensor)?.name || 'Card'}`
-    : scope.kind === 'section' ? `API · ${scope.item.title || 'Section'}` : 'API';
-  $('#api-tab-this').textContent = { widget: 'This card', section: 'This section', dashboard: 'This dashboard' }[scope.kind];
+    : scope.kind === 'section' ? `API · ${scope.item.title || 'Section'}` : scope.kind === 'osd' ? 'API · OSD' : 'API';
+  $('#api-tab-this').textContent = { widget: 'This card', section: 'This section', dashboard: 'This dashboard', osd: 'This OSD' }[scope.kind];
   render();
   if (!dlg.open) dlg.showModal();
 }
@@ -88,6 +88,10 @@ function scopeHtml() {
     parts.push(block('sensor', ctx, { title: `Its sensor: ${s.name}`, note: `Just the sensor (${s.hardware}), in its own unit (${s.unit || 'no unit'}).` }));
     if (ctx.sensors.length > 1) parts.push(block('values', ctx, { title: 'All its readings at once', note: 'The main reading and the extra ones, as compact as it gets.' }));
     parts.push(block('history', ctx, { title: 'Its history', note: 'Up to 30 days: average, lowest and highest per step.' }));
+  } else if (scope.kind === 'osd') {
+    parts.push(block('osd', ctx, { title: 'The OSD, with what it shows now', note: 'Whether it shows, its shortcut, the tray app on the PC, and each reading: its place on the screen, label and text.' }));
+    parts.push(block('osd-toggle', ctx, { title: 'Show or hide it', note: 'Like its shortcut: `/api/osd/toggle` switches it, `/api/osd/show` and `/api/osd/hide` set it. Needs a full-access key.' }));
+    if (ctx.sensors.length) parts.push(block('values', ctx, { title: 'Just the values', note: 'Every reading the OSD shows, by sensor id.' }));
   } else if (scope.kind === 'section') {
     parts.push(block('section', ctx, { title: 'Every card in this section', note: 'Each card as it shows it: label, value, text, colour level.' }));
     if (ctx.sensors.length) parts.push(block('values', ctx, { title: 'Just the values', note: 'Every reading the section shows, by sensor id.' }));

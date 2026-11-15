@@ -36,6 +36,9 @@
       <button id="btn-preview" class="icon" title="Phone preview: lay the dashboard out as a phone shows it" aria-pressed="false">
         <svg viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>
       </button>
+      <button id="btn-osd" class="icon" title="OSD: the readings this PC shows over games, on its own screen" aria-label="OSD" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8.5 20.5h7M12 17v3.5"/><path d="M5.8 7.6h4.4M5.8 10.4h2.6M16.6 7.6h1.6"/></svg>
+      </button>
       <button id="btn-layouts" class="icon" title="Layouts: switch, save, export, import" aria-label="Layouts">
         <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg>
       </button>
@@ -75,7 +78,7 @@
         </div>
       </div>
 
-      <div class="row">
+      <div class="row card-only">
         <label class="field">Display
           <select id="w-type">
             <option value="gauge">Gauge</option>
@@ -93,7 +96,7 @@
         </label>
       </div>
 
-      <div class="row" id="w-num-field">
+      <div class="row card-only" id="w-num-field">
         <label class="field">Value size
           <select id="w-nsize"></select>
         </label>
@@ -101,15 +104,15 @@
           <select id="w-upos"></select>
         </label>
       </div>
-      <label class="check" id="w-scale-field" hidden><input type="checkbox" id="w-scale-show" checked> Show the min and max values <span class="hint">(hidden, the bar keeps its width and stays centered)</span></label>
+      <label class="check card-only" id="w-scale-field" hidden><input type="checkbox" id="w-scale-show" checked> Show the min and max values <span class="hint">(hidden, the bar keeps its width and stays centered)</span></label>
 
-      <div class="row">
+      <div class="row card-only">
         <label class="field">Width <input id="w-w" type="number" min="1" max="16" step="1" required></label>
         <label class="field">Height <input id="w-h" type="number" min="1" max="12" step="1" required></label>
         <p class="hint field-hint">In grid cells. A phone is 4 cells wide. You can also drag a card's corner in edit mode.</p>
       </div>
 
-      <div class="range thick" id="w-thick-field">
+      <div class="range thick card-only" id="w-thick-field">
         <label for="w-thick"><span id="w-thick-name">Thickness</span> <output id="w-thick-out" for="w-thick">100%</output></label>
         <div class="thick-row">
           <input type="range" id="w-thick" min="25" max="300" step="5" value="100" aria-describedby="w-thick-hint">
@@ -118,14 +121,14 @@
         <p class="hint" id="w-thick-hint">Grows and shrinks with the card. 100% is the default; this makes it thinner or thicker than that.</p>
       </div>
 
-      <div class="row">
+      <div class="row card-only">
         <label class="field">Refresh
           <select id="w-interval" aria-describedby="w-interval-hint"></select>
         </label>
         <p class="hint field-hint" id="w-interval-hint">How often this card gets new readings. It follows the dashboard's rate unless you pick one; faster rates cost a little more CPU on the PC.</p>
       </div>
 
-      <div class="row">
+      <div class="row card-only">
         <label class="field">Card background
           <select id="w-alpha">
             <option value="">Dashboard default</option>
@@ -148,12 +151,52 @@
       </div>
 
       <div class="row">
-        <label class="field">Title <input id="w-label" maxlength="40"></label>
-        <label class="field">Subtitle <input id="w-sub" maxlength="60"></label>
+        <label class="field"><span id="w-label-name">Title</span> <input id="w-label" maxlength="40"></label>
+        <label class="field card-only">Subtitle <input id="w-sub" maxlength="60"></label>
       </div>
-      <label class="check"><input type="checkbox" id="w-sub-show" checked> Show the subtitle <span class="hint">(left empty, it names the device)</span></label>
+      <label class="check card-only"><input type="checkbox" id="w-sub-show" checked> Show the subtitle <span class="hint">(left empty, it names the device)</span></label>
 
-      <div class="field extras" id="w-extra-field">
+      <!-- On-screen display readings only -->
+      <div class="osd-only osd-fields">
+        <div class="field">
+          <span>Place on the screen</span>
+          <div class="osd-pos" id="o-pos" role="radiogroup" aria-label="Place on the screen">
+            <button type="button" role="radio" data-pos="tl" title="Top left"></button>
+            <button type="button" role="radio" data-pos="tc" title="Top center"></button>
+            <button type="button" role="radio" data-pos="tr" title="Top right"></button>
+            <button type="button" role="radio" data-pos="ml" title="Middle left"></button>
+            <span class="osd-pos-game" aria-hidden="true">game</span>
+            <button type="button" role="radio" data-pos="mr" title="Middle right"></button>
+            <button type="button" role="radio" data-pos="bl" title="Bottom left"></button>
+            <button type="button" role="radio" data-pos="bc" title="Bottom center"></button>
+            <button type="button" role="radio" data-pos="br" title="Bottom right"></button>
+          </div>
+          <span class="hint" id="o-pos-name"></span>
+        </div>
+        <div class="field">
+          <span>Next to the reading before it in that place</span>
+          <div class="segmented" id="o-stack">
+            <button type="button" data-stack="below">Under it</button>
+            <button type="button" data-stack="beside">Beside it</button>
+          </div>
+          <span class="hint">Under: a new line. Beside: on the same line, e.g. a temperature and a load side by side.</span>
+        </div>
+        <div class="row">
+          <label class="field">Size
+            <select id="o-size"></select>
+          </label>
+          <div class="field">
+            <span>Colour of the number</span>
+            <div class="inline o-color">
+              <label class="check"><input type="checkbox" id="o-color-own"> Own colour</label>
+              <input type="color" id="o-color" aria-label="Colour of the number">
+            </div>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="o-unit-show" checked> Show the unit <span class="hint">(°C, %, FPS…)</span></label>
+      </div>
+
+      <div class="field extras card-only" id="w-extra-field">
         <span>Also show on this card <small>up to 2 more readings under the main one: a value, a small graph or both, on the left, in the center or on the right</small></span>
         <ul class="extra-list" id="w-extra-list" hidden></ul>
         <button type="button" class="ghost add-reading" id="w-extra-add" aria-expanded="false" aria-controls="w-extra-picker">+ Add a reading</button>
@@ -169,8 +212,8 @@
       </div>
 
       <div class="row">
-        <label class="field">Scale min <input id="w-min" type="number" step="any" placeholder="0"></label>
-        <label class="field">Scale max <input id="w-max" type="number" step="any" placeholder="auto"></label>
+        <label class="field card-only">Scale min <input id="w-min" type="number" step="any" placeholder="0"></label>
+        <label class="field card-only">Scale max <input id="w-max" type="number" step="any" placeholder="auto"></label>
         <label class="field">Decimals
           <select id="w-dec"><option>0</option><option>1</option><option>2</option></select>
         </label>
@@ -178,18 +221,20 @@
           <select id="w-unit"><option>GB</option><option>MB</option></select>
         </label>
       </div>
-      <label class="check" id="w-total-field" hidden>
+      <label class="check card-only" id="w-total-field" hidden>
         <input type="checkbox" id="w-total"> Scale max follows the total <span class="hint" id="w-total-hint"></span>
       </label>
 
       <fieldset class="thresholds">
-        <legend>Thresholds <small>colour applies from each value upward</small></legend>
+        <legend>Thresholds <small>colour applies from each value upward<span class="osd-only">; below them all, the number has its own or the OSD's colour</span></small></legend>
         <div class="th"><span>Min</span><input id="t0-v" type="number" step="any" placeholder="off"><input id="t0-c" type="color"></div>
         <div class="th"><span>Med</span><input id="t1-v" type="number" step="any" placeholder="off"><input id="t1-c" type="color"></div>
         <div class="th"><span>Max</span><input id="t2-v" type="number" step="any" placeholder="off"><input id="t2-c" type="color"></div>
       </fieldset>
 
       <div class="buttons">
+        <button type="button" class="ghost danger osd-only" id="w-remove" hidden>Remove from the OSD</button>
+        <span class="grow osd-only"></span>
         <button value="cancel" formnovalidate class="ghost">Cancel</button>
         <button value="save" class="primary">Save</button>
       </div>
@@ -273,6 +318,7 @@
       <div class="segmented" id="l-which" role="group" aria-label="Which layout">
         <button data-which="desktop">Desktop layout</button>
         <button data-which="phone">Phone layout</button>
+        <button data-which="osd">OSD</button>
       </div>
       <p class="hint" id="l-which-hint"></p>
 
@@ -361,6 +407,82 @@
 
       <div class="buttons">
         <button type="button" class="ghost" id="k-reset">Defaults</button>
+        <span class="grow"></span>
+        <button value="cancel" formnovalidate class="ghost">Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- The on-screen display's look and shortcut, for one PC -->
+  <dialog id="dlg-osd">
+    <form method="dialog" class="sheet" id="osd-form">
+      <div class="h-title">
+        <h2>OSD settings</h2>
+        <span class="sub" id="o-sub"></span>
+      </div>
+
+      <div class="row o-font-row">
+        <label class="field">Font
+          <select id="o-font"></select>
+        </label>
+        <label class="check"><input type="checkbox" id="o-bold"> Bold</label>
+      </div>
+      <p class="hint o-fonts-hint" id="o-fonts-hint" hidden></p>
+      <div class="range thick">
+        <label for="o-fsize">Size <output id="o-fsize-out" for="o-fsize">18 px</output></label>
+        <input type="range" id="o-fsize" min="8" max="72" step="1" value="18">
+        <p class="hint">At 100% display scaling; on a screen Windows scales up (150%, say), it grows with everything else.</p>
+      </div>
+      <div class="row o-colors">
+        <label class="field">Numbers <input type="color" id="o-col"></label>
+        <label class="field">Labels and units <input type="color" id="o-lcol"></label>
+      </div>
+      <div class="range thick">
+        <label for="o-transp">Transparency <output id="o-transp-out" for="o-transp">0%</output></label>
+        <input type="range" id="o-transp" min="0" max="90" step="5" value="0">
+      </div>
+      <div class="range thick">
+        <label for="o-back">Backdrop <output id="o-back-out" for="o-back">40%</output></label>
+        <div class="thick-row">
+          <input type="range" id="o-back" min="0" max="100" step="5" value="40">
+          <input type="color" id="o-backcol" aria-label="Backdrop colour">
+        </div>
+        <p class="hint">A plate behind each group of readings; 0% draws none.</p>
+      </div>
+      <div class="field">
+        <span>Text edge</span>
+        <div class="segmented" id="o-outline">
+          <button type="button" data-outline="outline">Outline</button>
+          <button type="button" data-outline="shadow">Shadow</button>
+          <button type="button" data-outline="none">None</button>
+        </div>
+        <p class="hint">Keeps the readings legible over bright scenes.</p>
+      </div>
+      <div class="range thick">
+        <label for="o-margin">Distance from the screen's edges <output id="o-margin-out" for="o-margin">16 px</output></label>
+        <input type="range" id="o-margin" min="0" max="200" step="2" value="16">
+      </div>
+      <div class="row">
+        <label class="field">Screen
+          <select id="o-screen"></select>
+        </label>
+        <label class="field">Refresh
+          <select id="o-interval"></select>
+        </label>
+      </div>
+      <div class="field">
+        <span>Shortcut that shows and hides it</span>
+        <div class="inline">
+          <button type="button" class="ghost o-hotkey" id="o-hotkey" aria-describedby="o-hotkey-hint"></button>
+          <button type="button" class="ghost" id="o-hotkey-default">Default</button>
+          <button type="button" class="ghost" id="o-hotkey-none">None</button>
+        </div>
+        <p class="hint" id="o-hotkey-hint">Click it, then press the keys. It works anywhere on the PC, in games too, while the SYSCOM tray app runs there.</p>
+      </div>
+
+      <div class="buttons">
+        <button type="button" class="ghost" id="o-reset">Defaults</button>
         <span class="grow"></span>
         <button value="cancel" formnovalidate class="ghost">Cancel</button>
         <button value="save" class="primary">Save</button>
