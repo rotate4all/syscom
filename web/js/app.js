@@ -13,6 +13,11 @@ import { enableDnd } from './dnd.js';
 import { HistoryChart } from './history.js';
 import { exportLayout, readLayoutFile, remapLayout, fileName } from './transfer.js';
 import { openApi } from './apiview.js';
+import {
+  POSITIONS, positionName, OSD_INTERVALS, DEFAULT_HOTKEY, MAX_OSD_ITEMS, COMMON_FONTS, OSD_LOOK_DEFAULTS, normalizeOsdLook,
+  normalizeOsdItem, normalizeOsdItems, osdDefaultsFor, suggestOsd, osdGroups, removeOsdItem, osdGroupStyle, renderOsdPreview,
+  paintOsdItem, hotkeyFromEvent,
+} from './osd.js';
 
 const $ = (s, root = document) => root.querySelector(s);
 const state = load();
@@ -58,6 +63,12 @@ function connectionFor(dev) {
   c.addEventListener('layout', (e) => syncLayout(dev, e.detail.rev));
   c.addEventListener('devices', (e) => { if (c.home) syncDevices(c, e.detail.rev); });
   c.addEventListener('status', () => { if (c.status === 'online' && c.home) checkWebVersion(); });
+  c.addEventListener('osd', (e) => onOsdMessage(dev, c, e.detail));
+  c.addEventListener('status', () => {
+    if (layoutMode() !== 'osd') return;
+    if (c.status === 'online') loadOsdStatus(dev);
+    renderOsdBar(dev);
+  });
   setHome(c);
   conns.set(dev.key, c);
   return c;
@@ -97,6 +108,13 @@ function paintFrame(dev, frame) {
   const page = pages.get(dev.key);
   const conn = conns.get(dev.key);
   if (!page || !conn || !frame) return;
+  if (page.osd) {   // the OSD view: its readings, in the preview of the screen
+    for (const el of page.osd.els.values()) {
+      if (frame.index && !frame.index.has(el.item.sensor)) continue;
+      paintOsdItem(el, conn.sensors.get(el.item.sensor), conn.value(frame, el.item.sensor), page.osd.look);
+    }
+    return;
+  }
   const visible = state.devices[active] === dev && document.visibilityState === 'visible';
   for (const w of dev.widgets) {
     const inst = page.widgets.get(w.id);
@@ -264,7 +282,7 @@ function saveLayout(dev, { adopt = true, track = true } = {}) {
 }
 
 /** What a push sends (and what tells whether another edit came in meanwhile). */
-const dashJson = (dev) => JSON.stringify([dev.layouts, dev.look, dev.saved, dev.current]);
+const dashJson = (dev) => JSON.stringify([dev.layouts, dev.look, dev.osdLook, dev.saved, dev.current]);
 
 async function pushLayout(dev) {
   const conn = conns.get(dev.key);
@@ -292,7 +310,7 @@ async function syncLayout(dev, rev) {
   try { saved = await conn.loadDashboard(); } catch { return; }   // offline or signed out; the next announcement retries
   if (!saved.rev || !Array.isArray(saved.widgets)) {
     // Nothing on the PC yet: this browser's dashboard becomes the PC's.
-    if (dev.layouts.desktop.length || dev.layouts.phone || dev.saved.length) { dev.layoutDirty = true; pushLayout(dev); }
+    if (dev.layouts.desktop.length || dev.layouts.phone || dev.layouts.osd.length || dev.saved.length) { dev.layoutDirty = true; pushLayout(dev); }
     return;
   }
   if (dev.layoutDirty || saved.rev === dev.layoutRev) return;
@@ -310,10 +328,14 @@ async function syncLayout(dev, rev) {
 // ---------- undo / redo of dashboard edits (the last few steps per PC and layout, while this page is open)
 const UNDO_STEPS = 5;
 const undos = new Map();   // `${dev.key}|${layoutMode()}` → { base: JSON, past: [], future: [] }
+/** What a step restores: the desktop and phone layouts, or in the OSD view the OSD (its readings and settings). */
+const undoState = (dev) => JSON.stringify(layoutMode() === 'osd'
+  ? { osd: dev.layouts.osd, look: dev.osdLook }
+  : { desktop: dev.layouts.desktop, phone: dev.layouts.phone });
 const undoOf = (dev) => {
   const k = `${dev.key}|${layoutMode()}`;
   let u = undos.get(k);
-  if (!u) undos.set(k, (u = { base: JSON.stringify(dev.layouts), past: [], future: [] }));
+  if (!u) undos.set(k, (u = { base: undoState(dev), past: [], future: [] }));
   return u;
 };
 
@@ -322,7 +344,7 @@ function primeUndo(dev) { undoOf(dev); }
 
 function recordUndo(dev) {
   const u = undoOf(dev);
-  const now = JSON.stringify(dev.layouts);
+  const now = undoState(dev);
   if (now === u.base) return;
   u.past.push(u.base);
   if (u.past.length > UNDO_STEPS) u.past.shift();
@@ -345,7 +367,10 @@ function undoRedo(dir) {
   (dir < 0 ? u.future : u.past).push(u.base);
   u.base = from.pop();
   const l = JSON.parse(u.base);
-  dev.layouts = normalizeLayouts(l.desktop, l.phone);
+  if (layoutMode() === 'osd') {
+    dev.layouts.osd = normalizeLayouts([], null, l.osd).osd;
+    dev.osdLook = normalizeOsdLook(l.look);
+  } else dev.layouts = normalizeLayouts(l.desktop, l.phone, dev.layouts.osd);
   saveLayout(dev, { adopt: false, track: false });
   renderPage(dev);
   conns.get(dev.key)?.subscribe();
@@ -455,6 +480,8 @@ function renderPage(dev) {
   p.widgets.forEach((w) => w.destroy());
   p.widgets.clear();
   p.board.replaceChildren();
+  p.osd = null;
+  if (layoutMode() === 'osd') { renderOsdPage(dev, p, conn); primeUndo(dev); return; }
 
   for (const g of groupsOf(dev.widgets)) {
     const group = document.createElement('div');
@@ -626,6 +653,7 @@ function widgetSignature(w, conn) {
 function refreshPage(dev) {
   const p = pages.get(dev.key);
   const conn = conns.get(dev.key);
+  if (layoutMode() === 'osd') return false;   // the OSD preview is quick to draw again
   const widgets = dev.widgets.filter((x) => !isSection(x));
   if (!p || !conn || p.widgets.size !== widgets.length) return false;
   for (const w of widgets) {
@@ -683,7 +711,7 @@ function renderMessage(dev) {
 
   if (conn?.status === 'offline') {
     p.msg.innerHTML = `<div class="notice"><strong>Can't reach ${escapeHtml(dev.name)}.</strong> Retrying… <span class="sub">${escapeHtml(dev.url)}</span></div>`;
-  } else if (!dev.widgets.length && conn?.status === 'online') {
+  } else if (!dev.widgets.length && conn?.status === 'online' && layoutMode() !== 'osd') {
     const box = document.createElement('div');
     box.className = 'empty';
     box.innerHTML = '<p><strong>This dashboard is empty.</strong></p><p>Start with a suggested layout or add widgets one by one.</p><div class="inline"><button class="primary" data-a="quick">Suggested layout</button><button class="ghost" data-a="add">Add widget</button></div>';
@@ -787,12 +815,13 @@ function refreshVisible() {
 }
 
 // ---------- edit mode
-$('#btn-edit').onclick = () => {
-  editing = !editing;
+function setEditing(on) {
+  editing = on;
   document.body.classList.toggle('editing', editing);
   $('#btn-edit').setAttribute('aria-pressed', String(editing));
   updateUndoButtons();
-};
+}
+$('#btn-edit').onclick = () => setEditing(!editing);
 
 // ---------- phone preview: the dashboard at phone width (4 columns), to lay it out for the people who use it there
 function applyPreview() {
@@ -802,9 +831,10 @@ function applyPreview() {
   requestAnimationFrame(() => { $('#pages').scrollTo({ left: active * $('#pages').clientWidth }); refreshVisible(); });
 }
 
-// Phones (narrow screens) and the phone preview show each PC's phone layout; wider screens its desktop layout.
+// Phones (narrow screens) and the phone preview show each PC's phone layout; wider screens its desktop layout; the
+// OSD view each PC's OSD.
 const PHONE_WIDTH = 700;
-function wantedLayoutMode() { return state.preview || innerWidth < PHONE_WIDTH ? 'phone' : 'desktop'; }
+function wantedLayoutMode() { return state.osdView ? 'osd' : state.preview || innerWidth < PHONE_WIDTH ? 'phone' : 'desktop'; }
 function updateLayoutMode() {
   const next = wantedLayoutMode();
   if (next === layoutMode()) return;
@@ -814,13 +844,475 @@ function updateLayoutMode() {
     renderPage(dev);
     conns.get(dev.key)?.subscribe();
   }
+  updateHeader();
 }
 addEventListener('resize', updateLayoutMode);
 $('#btn-preview').onclick = () => {
   state.preview = !state.preview;
+  if (state.preview && state.osdView) { state.osdView = false; applyOsdView(); }
   persist();
   applyPreview();
 };
+
+// ---------- the OSD view: the readings each PC's tray app draws over games on its own screen (osd.js), laid out on
+// a picture of that screen. Always editable: click a reading to change it, drag it to move it.
+const OSD_BG = [['scene', 'Game'], ['dark', 'Dark'], ['light', 'Light']];
+const LAYOUT_NAME = { desktop: 'desktop layout', phone: 'phone layout', osd: 'OSD' };
+
+function applyOsdView() {
+  document.body.classList.toggle('osd-view', state.osdView);
+  $('#btn-osd').setAttribute('aria-pressed', String(state.osdView));
+  if (state.osdView && editing) setEditing(false);
+  updateLayoutMode();
+  if (state.osdView) state.devices.forEach((d) => loadOsdStatus(d));
+}
+$('#btn-osd').onclick = () => {
+  state.osdView = !state.osdView;
+  if (state.osdView && state.preview) { state.preview = false; applyPreview(); }
+  persist();
+  applyOsdView();
+};
+
+/** What the PC says about its OSD (shown, shortcut, tray app, screens): conn.osd, while the OSD view is open. */
+async function loadOsdStatus(dev) {
+  const conn = conns.get(dev.key);
+  if (!conn || conn.status !== 'online') return;
+  if (conn.osdLoading) { conn.osdAgain = true; return; }
+  conn.osdLoading = true;
+  try {
+    do {
+      conn.osdAgain = false;
+      try { conn.osd = await conn.osdStatus(); } catch { /* offline or signed out: the next announcement retries */ }
+    } while (conn.osdAgain);
+  } finally { conn.osdLoading = false; }
+  if (layoutMode() === 'osd') { renderOsdBar(dev); if (!osdOf) renderOsdScreen(dev); }
+}
+
+/** The PC announced a change: shown or hidden (from its shortcut, the tray menu, a script), or its tray app's report. */
+function onOsdMessage(dev, conn, { rev, shown }) {
+  if (conn.osd && !conn.osd.unsupported) conn.osd.shown = shown;
+  const changed = rev !== conn.osdRev;
+  conn.osdRev = rev;
+  if (layoutMode() !== 'osd') return;
+  renderOsdBar(dev);
+  if (changed) loadOsdStatus(dev);
+}
+
+/** The screen the OSD goes on, in logical pixels (as the PC's tray app reports it; a 1080p screen until then). */
+function osdScreenOf(conn, look) {
+  const list = conn?.osd?.tray?.screens || [];
+  const s = list.find((x) => x.id === look.screen) || list.find((x) => x.primary) || list[0];
+  if (!s || !s.width || !s.height) return { w: 1920, h: 1080 };
+  return { w: Math.round(s.width / (s.scale || 1)), h: Math.round(s.height / (s.scale || 1)) };
+}
+
+function renderOsdPage(dev, p, conn) {
+  const box = document.createElement('div');
+  box.className = 'osd-page';
+  box.innerHTML = `
+    <div class="osd-bar">
+      <label class="switch"><input type="checkbox" class="osd-shown"><span class="knob" aria-hidden="true"></span><span class="osd-shown-text"></span></label>
+      <span class="osd-key"></span>
+      <span class="grow"></span>
+      <div class="segmented osd-bgs" role="group" aria-label="Preview background">${OSD_BG.map(([k, l]) => `<button type="button" data-bg="${k}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="osd-warn"></div>
+    <div class="osd-stage">
+      <div class="osd-screen">
+        <div class="osd-zones" aria-hidden="true">${['tl', 'tc', 'tr', 'ml', '', 'mr', 'bl', 'bc', 'br']
+    .map((k) => (k ? `<div class="osd-zone" data-pos="${k}"><span>${positionName(k)}</span></div>` : '<div class="osd-zone center"></div>')).join('')}</div>
+        <div class="osd-empty" hidden>
+          <p><strong>No readings on the OSD yet.</strong></p>
+          <div class="inline"><button type="button" class="primary" data-a="suggest">Suggested OSD</button><button type="button" class="ghost" data-a="add">Add a reading</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="osd-tools">
+      <button type="button" class="primary" data-a="add">+ Add a reading</button>
+      <button type="button" class="ghost" data-a="look">Settings…</button>
+      <button type="button" class="ghost" data-a="suggest">↺ Suggested OSD</button>
+      <button type="button" class="ghost" data-a="layouts">Layouts…</button>
+      <button type="button" class="ghost" data-a="api">API…</button>
+    </div>
+    <p class="hint osd-note"></p>`;
+  $('.osd-note', box).textContent = `The SYSCOM tray app draws these over everything on ${dev.name}'s screen, games included, while it runs there. `
+    + 'Games in exclusive full screen hide it: set them to borderless (or windowed) full screen. '
+    + 'Click a reading to change it; drag it onto another one to put it beside that one, under a line to start a new line, or to another place on the screen.';
+  p.board.append(box);
+  p.osd = { box, screen: $('.osd-screen', box), els: new Map(), look: dev.osdLook };
+
+  $('.osd-shown', box).onchange = async (e) => {
+    const want = e.target.checked;
+    try {
+      const shown = await conn.setOsdShown(want);
+      if (conn.osd) conn.osd.shown = shown;
+    } catch (ex) { alert(`Couldn't ${want ? 'show' : 'hide'} the OSD: ${ex.message}`); }
+    renderOsdBar(dev);
+  };
+  $('.osd-bgs', box).onclick = (e) => {
+    const bg = e.target.closest('button')?.dataset.bg;
+    if (!bg) return;
+    state.osdBg = bg;
+    persist();
+    for (const q of pages.values()) if (q.osd) { q.osd.screen.dataset.bg = bg; renderOsdBar(state.devices.find((d) => pages.get(d.key) === q)); }
+  };
+  box.addEventListener('click', (e) => {
+    const a = e.target.closest('button[data-a]')?.dataset.a;
+    if (a === 'add') openWidgetEditor(dev, null);
+    else if (a === 'look') openOsdLook(dev);
+    else if (a === 'layouts') openLayouts(dev);
+    else if (a === 'api') showApi(dev, { scope: { kind: 'osd' } });
+    else if (a === 'suggest') {
+      if (!conn.catalog.length) { alert('Connect to this device first to see its sensors.'); return; }
+      if (dev.layouts.osd.length && !confirm(`Replace the OSD of ${dev.name} with the suggested one?`)) return;
+      dev.layouts.osd = suggestOsd(conn.catalog).map((x) => ({ ...x, id: uid() }));
+      saveLayout(dev); renderPage(dev); conn.subscribe();
+    }
+  });
+  enableOsdDnd(dev, p);
+  renderOsdBar(dev);
+  renderOsdScreen(dev);
+  renderMessage(dev);
+  if (!conn.osd && conn.status === 'online') loadOsdStatus(dev);
+}
+
+/** The switch, the shortcut and what keeps the OSD from showing. */
+function renderOsdBar(dev) {
+  const p = dev && pages.get(dev.key);
+  if (!p?.osd) return;
+  const conn = conns.get(dev.key);
+  const st = conn?.osd;
+  const box = p.osd.box;
+  const ready = !!st && !st.unsupported && conn.status === 'online';
+  const input = $('.osd-shown', box);
+  input.checked = ready && !!st.shown;
+  input.disabled = !ready;
+  $('.osd-shown-text', box).textContent = `Show on ${dev.name}'s screen`;
+  const key = dev.osdLook.hotkey;   // as saved (the tray app takes a new one within a couple of seconds)
+  $('.osd-key', box).innerHTML = key
+    ? `Shortcut ${key.split(/\+(?!$)/).map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('+')}`
+    : 'No shortcut: the switch here, the tray menu or the API show it.';
+  box.querySelectorAll('.osd-bgs button').forEach((b) => b.classList.toggle('active', b.dataset.bg === state.osdBg));
+  let warn = '';
+  const name = escapeHtml(dev.name);
+  if (st?.unsupported) warn = `<strong>${name} runs an older SYSCOM.</strong> The OSD needs SYSCOM 0.19 or newer there: update it from the SYSCOM tray app on that PC (or its setup). You can lay the OSD out here meanwhile.`;
+  else if (st && !st.tray?.running) warn = `<strong>The SYSCOM tray app isn't running on ${name}.</strong> It's what draws the OSD: start SYSCOM from the Start menu there.`;
+  else if (st?.tray?.hotkeyError) warn = `<strong>The shortcut doesn't work.</strong> ${escapeHtml(st.tray.hotkeyError)} Pick another one in Settings…`;
+  $('.osd-warn', box).innerHTML = warn ? `<div class="notice warn">${warn}</div>` : '';
+}
+
+/** The picture of the screen with the readings on it; `look` may be a draft (the settings window previews it live). */
+function renderOsdScreen(dev, look = osdOf?.dev === dev ? osdOf.draft : dev.osdLook) {
+  const p = pages.get(dev.key);
+  if (!p?.osd) return;
+  const conn = conns.get(dev.key);
+  const s = p.osd.screen;
+  const size = osdScreenOf(conn, look);
+  s.dataset.bg = state.osdBg;
+  s.style.setProperty('--sw', String(size.w));
+  s.style.setProperty('--sh', String(size.h));
+  s.style.setProperty('--fs', String(look.size));
+  s.style.setProperty('--m', String(look.margin));
+  s.style.aspectRatio = `${size.w} / ${size.h}`;
+  p.osd.look = look;
+  p.osd.els = renderOsdPreview(s, dev.layouts.osd, look, (id) => conn?.sensors.get(id));
+  for (const el of p.osd.els.values()) {
+    paintOsdItem(el, conn?.sensors.get(el.item.sensor), conn?.values.get(el.item.sensor) ?? null, look);
+    const n = el.cells.n;
+    n.tabIndex = 0;
+    n.setAttribute('role', 'button');
+    n.setAttribute('aria-label', `Edit ${el.cells.l.textContent || conn?.sensors.get(el.item.sensor)?.name || 'reading'}`);
+  }
+  $('.osd-empty', p.osd.box).hidden = dev.layouts.osd.length > 0;
+}
+
+// Moving readings: drag one onto another (beside it), under a line (a new line after it) or to a place on the screen
+// (a new line at its end). A click without moving opens its editor.
+function enableOsdDnd(dev, p) {
+  const screen = p.osd.screen;
+  const idOf = (target) => target?.closest?.('.osd-e')?.dataset.id || null;
+  const find = (id) => dev.layouts.osd.find((x) => x.id === id);
+  const local = (r) => { const s = screen.getBoundingClientRect(); return { left: r.left - s.left, top: r.top - s.top, width: r.width, height: r.height }; };
+  const place = (el, r) => Object.assign(el.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  const hl = document.createElement('div');
+  hl.className = 'osd-hl';
+  hl.hidden = true;
+  screen.append(hl);
+
+  /** The box around a reading's cells, or around a whole line of them. */
+  function boxOf(ids) {
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    for (const id of ids) {
+      for (const c of Object.values(p.osd.els.get(id)?.cells || {})) {
+        const x = c.getBoundingClientRect();
+        if (!x.width && !x.height) continue;
+        l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom);
+      }
+    }
+    return l === Infinity ? null : { left: l, top: t, right: r, bottom: b, width: r - l, height: b - t };
+  }
+  const rowOf = (id) => {
+    const item = find(id);
+    return osdGroups(dev.layouts.osd).find((g) => g.pos === item?.pos)?.rows.find((row) => row.includes(item)) || [];
+  };
+
+  screen.addEventListener('pointermove', (e) => {
+    if (screen.classList.contains('dragging')) return;
+    const id = idOf(e.target);
+    const r = id && boxOf([id]);
+    hl.hidden = !r;
+    if (r) place(hl, local(r));
+  });
+  screen.addEventListener('pointerleave', () => { hl.hidden = true; });
+  screen.addEventListener('keydown', (e) => {
+    const id = idOf(e.target);
+    if (!id) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWidgetEditor(dev, find(id)); }
+    else if (e.key === 'Delete') { e.preventDefault(); dev.layouts.osd = removeOsdItem(dev.layouts.osd, find(id)); saveLayout(dev); renderPage(dev); conns.get(dev.key)?.subscribe(); }
+  });
+
+  screen.addEventListener('pointerdown', (e) => {
+    const id = idOf(e.target);
+    if (!id || e.button > 0) return;
+    e.preventDefault();
+    const x0 = e.clientX, y0 = e.clientY;
+    let drag = null;
+    const move = (m) => {
+      if (!drag && Math.hypot(m.clientX - x0, m.clientY - y0) < 5) return;
+      drag ||= startDrag(id);
+      drag.move(m);
+    };
+    const end = (u) => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', end);
+      removeEventListener('pointercancel', end);
+      if (drag) drag.drop(u.type === 'pointerup');
+      else if (u.type === 'pointerup' && find(id)) openWidgetEditor(dev, find(id));
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', end);
+    addEventListener('pointercancel', end);
+  });
+
+  function startDrag(id) {
+    hl.hidden = true;
+    const el = p.osd.els.get(id);
+    const ghost = document.createElement('div');
+    ghost.className = 'osd-ghost';
+    Object.assign(ghost.style, osdGroupStyle(p.osd.look));
+    ghost.style.setProperty('--label', p.osd.look.labelColor);
+    ghost.style.fontSize = getComputedStyle(el.cells.n.parentElement.parentElement).fontSize;
+    for (const c of Object.values(el.cells)) if (c.textContent) ghost.append(c.cloneNode(true));
+    document.body.append(ghost);
+    Object.values(el.cells).forEach((c) => c.classList.add('osd-src'));
+    screen.classList.add('dragging');
+    const mark = document.createElement('div');
+    mark.className = 'osd-drop';
+    mark.hidden = true;
+    screen.append(mark);
+    let target = null;
+
+    const targetAt = (x, y) => {
+      const s = screen.getBoundingClientRect();
+      if (x < s.left || x > s.right || y < s.top || y > s.bottom) return null;
+      const over = idOf(document.elementFromPoint(x, y));
+      if (over && over !== id) {
+        const r = boxOf([over]);
+        if (r && y > r.top + r.height * 0.7) return { kind: 'below', ref: over, box: boxOf(rowOf(over).map((x2) => x2.id)) };
+        return { kind: 'beside', ref: over, box: r };
+      }
+      if (over === id) return null;
+      const g = document.elementFromPoint(x, y)?.closest?.('.osd-g');
+      const col = Math.min(2, Math.floor(((x - s.left) / s.width) * 3));
+      const row = Math.min(2, Math.floor(((y - s.top) / s.height) * 3));
+      const pos = g?.dataset.pos || ['t', 'm', 'b'][row] + ['l', 'c', 'r'][col];
+      return pos === 'mc' ? null : { kind: 'end', pos };
+    };
+
+    return {
+      move(m) {
+        ghost.style.transform = `translate(${m.clientX + 14}px, ${m.clientY + 10}px)`;
+        target = targetAt(m.clientX, m.clientY);
+        screen.querySelectorAll('.osd-zone').forEach((z) => z.classList.toggle('over', target?.kind === 'end' && z.dataset.pos === target.pos));
+        mark.hidden = !target?.box;
+        if (target?.kind === 'beside') place(mark, local({ left: target.box.right + 1, top: target.box.top, width: 3, height: target.box.height }));
+        else if (target?.kind === 'below') place(mark, local({ left: target.box.left, top: target.box.bottom + 1, width: target.box.width, height: 3 }));
+      },
+      drop(ok) {
+        ghost.remove();
+        mark.remove();
+        screen.classList.remove('dragging');
+        screen.querySelectorAll('.osd-zone.over').forEach((z) => z.classList.remove('over'));
+        Object.values(el.cells).forEach((c) => c.classList.remove('osd-src'));
+        if (!ok || !target || !find(id) || (target.ref && !find(target.ref))) return;
+        moveOsdItem(dev, find(id), target);
+        saveLayout(dev);
+        renderPage(dev);
+      },
+    };
+  }
+}
+
+/** Puts a reading beside another one, on a new line after another one's line, or at the end of a place. */
+function moveOsdItem(dev, item, target) {
+  let items = removeOsdItem(dev.layouts.osd, item);
+  if (target.kind === 'end') {
+    item.pos = target.pos;
+    delete item.stack;
+    items.push(item);
+  } else {
+    const ref = items.find((x) => x.id === target.ref);
+    let at = items.indexOf(ref) + 1;
+    item.pos = ref.pos;
+    if (target.kind === 'beside') item.stack = 'beside';
+    else {
+      const row = osdGroups(items).find((g) => g.pos === ref.pos).rows.find((r) => r.includes(ref));
+      at = items.indexOf(row[row.length - 1]) + 1;
+      delete item.stack;
+    }
+    items = [...items.slice(0, at), item, ...items.slice(at)];
+  }
+  dev.layouts.osd = items;
+}
+
+// ---------- the OSD's settings: font, size, colours, transparency, backdrop, edge, margin, screen, refresh, shortcut
+const dlgOsd = $('#dlg-osd');
+let osdOf = null;   // { dev, draft, recording }
+for (const ms of OSD_INTERVALS) $('#o-interval').add(new Option(`Every ${seconds(ms)}`, String(ms)));
+for (const [k, l] of NUMBER_SIZE) $('#o-size').add(new Option(l, k));
+const OSD_FONTS_HINT = "Fonts every Windows PC has. The PC's own fonts are listed here while its SYSCOM tray app runs.";
+const HOTKEY_HINT = $('#o-hotkey-hint').textContent;
+
+async function openOsdLook(dev) {
+  osdOf = { dev, draft: structuredClone(dev.osdLook), recording: false };
+  $('#o-sub').textContent = dev.name;
+  $('#o-hotkey-hint').textContent = HOTKEY_HINT;
+  dlgOsd.returnValue = '';
+  fillOsdFonts([]);
+  fillOsdLook();
+  dlgOsd.showModal();
+  if (conns.get(dev.key)?.status === 'online') loadOsdStatus(dev);
+  try {
+    const fonts = await conns.get(dev.key)?.osdFonts();
+    if (osdOf?.dev === dev && fonts?.length) { fillOsdFonts(fonts); fillOsdLook(); }
+  } catch { /* an older PC, or offline: the common fonts */ }
+}
+
+function fillOsdFonts(fonts) {
+  const names = [...new Set(fonts.length ? fonts : COMMON_FONTS)].sort((a, b) => a.localeCompare(b));
+  $('#o-font').replaceChildren(...names.map((n) => new Option(n, n)));
+  $('#o-fonts-hint').textContent = OSD_FONTS_HINT;
+  $('#o-fonts-hint').hidden = fonts.length > 0;
+}
+
+function fillOsdLook() {
+  const d = osdOf.draft;
+  const font = $('#o-font');
+  if (![...font.options].some((o) => o.value === d.font)) font.prepend(new Option(d.font, d.font));
+  font.value = d.font;
+  $('#o-bold').checked = d.bold;
+  $('#o-fsize').value = String(d.size);
+  $('#o-fsize-out').textContent = `${d.size} px`;
+  $('#o-col').value = d.color;
+  $('#o-lcol').value = d.labelColor;
+  $('#o-transp').value = String(d.transparency);
+  $('#o-transp-out').textContent = `${d.transparency}%${d.transparency === 0 ? ' (solid)' : ''}`;
+  $('#o-back').value = String(d.backdrop);
+  $('#o-back-out').textContent = d.backdrop ? `${d.backdrop}%` : 'none';
+  $('#o-backcol').value = d.backdropColor;
+  $('#o-backcol').disabled = d.backdrop === 0;
+  document.querySelectorAll('#o-outline button').forEach((b) => b.classList.toggle('active', b.dataset.outline === d.outline));
+  $('#o-margin').value = String(d.margin);
+  $('#o-margin-out').textContent = `${d.margin} px`;
+  const screens = conns.get(osdOf.dev.key)?.osd?.tray?.screens || [];
+  const sel = $('#o-screen');
+  sel.replaceChildren(new Option('Main screen', ''),
+    ...screens.map((s) => new Option(`${s.name}: ${s.width} × ${s.height}${s.primary ? ' (main)' : ''}`, s.id)));
+  if (d.screen && !screens.some((s) => s.id === d.screen)) sel.add(new Option('A screen not connected now', d.screen));
+  sel.value = d.screen || '';
+  const iv = $('#o-interval');
+  if (![...iv.options].some((o) => o.value === String(d.interval))) iv.add(new Option(`Every ${seconds(d.interval)}`, String(d.interval)));
+  iv.value = String(d.interval);
+  const key = $('#o-hotkey');
+  key.classList.toggle('recording', osdOf.recording);
+  key.textContent = osdOf.recording ? 'Press the keys…' : d.hotkey || 'None';
+  $('#o-hotkey-default').disabled = d.hotkey === DEFAULT_HOTKEY;
+  $('#o-hotkey-none').disabled = d.hotkey === '';
+}
+
+/** A change in the window: shown on the page behind it right away, saved with Save. */
+function osdLookChanged() {
+  osdOf.draft = normalizeOsdLook(osdOf.draft);
+  fillOsdLook();
+  renderOsdScreen(osdOf.dev, osdOf.draft);
+}
+const osdInput = (sel, apply) => $(sel).addEventListener('input', (e) => { if (osdOf) { apply(osdOf.draft, e.target); osdLookChanged(); } });
+osdInput('#o-font', (d, t) => { d.font = t.value; });
+osdInput('#o-bold', (d, t) => { d.bold = t.checked; });
+osdInput('#o-fsize', (d, t) => { d.size = Number(t.value); });
+osdInput('#o-col', (d, t) => { d.color = t.value; });
+osdInput('#o-lcol', (d, t) => { d.labelColor = t.value; });
+osdInput('#o-transp', (d, t) => { d.transparency = Number(t.value); });
+osdInput('#o-back', (d, t) => { d.backdrop = Number(t.value); });
+osdInput('#o-backcol', (d, t) => { d.backdropColor = t.value; });
+osdInput('#o-margin', (d, t) => { d.margin = Number(t.value); });
+osdInput('#o-screen', (d, t) => { d.screen = t.value || null; });
+osdInput('#o-interval', (d, t) => { d.interval = Number(t.value); });
+$('#o-font').addEventListener('change', (e) => { if (osdOf) { osdOf.draft.font = e.target.value; osdLookChanged(); } });
+$('#o-outline').addEventListener('click', (e) => {
+  const v = e.target.closest('button')?.dataset.outline;
+  if (v && osdOf) { osdOf.draft.outline = v; osdLookChanged(); }
+});
+$('#o-reset').onclick = () => {
+  if (!osdOf) return;
+  osdOf.draft = { ...OSD_LOOK_DEFAULTS, screen: osdOf.draft.screen };
+  osdLookChanged();
+};
+
+// The shortcut: click the button, then press the keys (Esc keeps the one there was).
+function setHotkey(text) {
+  osdOf.recording = false;
+  osdOf.draft.hotkey = text;
+  $('#o-hotkey-hint').textContent = text === 'Ctrl+Shift+S'
+    ? `${HOTKEY_HINT} Many apps use Ctrl+Shift+S for "Save as": while the tray app runs, it shows and hides the OSD instead.`
+    : HOTKEY_HINT;
+  osdLookChanged();
+}
+$('#o-hotkey').onclick = () => {
+  if (!osdOf) return;
+  osdOf.recording = !osdOf.recording;
+  $('#o-hotkey-hint').textContent = osdOf.recording ? 'Press the keys for the shortcut, e.g. Ctrl+Shift+S or Alt+F10. Esc cancels.' : HOTKEY_HINT;
+  fillOsdLook();
+};
+$('#o-hotkey').addEventListener('keydown', (e) => {
+  if (!osdOf?.recording) return;
+  if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) { osdOf.recording = false; fillOsdLook(); return; }
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === 'Escape') { osdOf.recording = false; osdOf.escaped = Date.now(); $('#o-hotkey-hint').textContent = HOTKEY_HINT; fillOsdLook(); return; }
+  const got = hotkeyFromEvent(e);
+  if (!got) return;   // a modifier on its own: wait for the key
+  if (got.error) { $('#o-hotkey-hint').textContent = got.error; return; }
+  setHotkey(got.hotkey);
+});
+$('#o-hotkey').addEventListener('blur', () => { if (osdOf?.recording) { osdOf.recording = false; $('#o-hotkey-hint').textContent = HOTKEY_HINT; fillOsdLook(); } });
+$('#o-hotkey-default').onclick = () => { if (osdOf) setHotkey(DEFAULT_HOTKEY); };
+$('#o-hotkey-none').onclick = () => { if (osdOf) setHotkey(''); };
+// Esc while recording a shortcut cancels the recording, not the window.
+dlgOsd.addEventListener('cancel', (e) => { if (osdOf && (osdOf.recording || Date.now() - (osdOf.escaped || 0) < 200)) e.preventDefault(); });
+
+dlgOsd.addEventListener('close', () => {
+  const of = osdOf;
+  osdOf = null;
+  if (!of) return;
+  if (dlgOsd.returnValue === 'save') {
+    of.dev.osdLook = normalizeOsdLook(of.draft);
+    saveLayout(of.dev);
+  }
+  renderOsdScreen(of.dev);
+  renderOsdBar(of.dev);
+});
+
 
 // ---------- widget editor
 const dlgWidget = $('#dlg-widget');
@@ -862,11 +1354,17 @@ let unitShown = null;   // the size unit the form's numbers are in
 function openWidgetEditor(dev, widget, sectionId = null) {
   const conn = conns.get(dev.key);
   if (!conn?.catalog.length) { alert('Connect to this device first to see its sensors.'); return; }
-  editTarget = { dev, widget, sectionId };
+  // In the OSD view the same window edits a reading of the OSD (the card-only parts hide, the OSD's show).
+  const osd = layoutMode() === 'osd';
+  if (osd && !widget && dev.layouts.osd.length >= MAX_OSD_ITEMS) { alert(`${MAX_OSD_ITEMS} readings is the most the OSD shows.`); return; }
+  editTarget = { dev, widget, sectionId, osd };
   extrasShown = [];
   extrasTouched = false;
   $('#w-extra-picker').hidden = true;
-  $('#widget-title').textContent = widget ? 'Edit widget' : 'Add widget';
+  dlgWidget.classList.toggle('osd-mode', osd);
+  $('#w-remove').hidden = !(osd && widget);
+  $('#w-label-name').textContent = osd ? 'Label' : 'Title';
+  $('#widget-title').textContent = osd ? (widget ? 'Edit OSD reading' : 'Add a reading to the OSD') : widget ? 'Edit widget' : 'Add widget';
   $('#w-search').value = '';
   const current = widget && conn.sensors.get(widget.sensor);
   if (current) { pick.dev = deviceCat(current); pick.read = readingCat(current); }
@@ -877,7 +1375,10 @@ function openWidgetEditor(dev, widget, sectionId = null) {
   conn.setWatchAll(true);
   fillSensorList(conn.catalog, widget?.sensor);
   const sensor = conn.sensors.get($('#w-sensor').value);
-  fillWidgetForm(widget || defaultsFor(sensor || conn.catalog[0], conn.catalog), sensor, conn.catalog);
+  if (osd) {
+    const last = dev.layouts.osd[dev.layouts.osd.length - 1];
+    fillOsdForm(widget || { ...osdDefaultsFor(sensor || conn.catalog[0], conn.catalog), pos: last?.pos || 'tl' }, sensor);
+  } else fillWidgetForm(widget || defaultsFor(sensor || conn.catalog[0], conn.catalog), sensor, conn.catalog);
   dlgWidget.showModal();
   showActiveTab();
   revealSensor();
@@ -1149,7 +1650,7 @@ for (const [k, l] of NUMBER_SIZE) $('#w-nsize').add(new Option(l, k));
 for (const [k, l] of UNIT_POS) $('#w-upos').add(new Option(l, k));
 
 /** A card's own opacity or rounding ('' = the dashboard's); a value set elsewhere gets its own choice. */
-const seconds = (ms) => (ms < 1000 ? `${ms} ms` : `${ms / 1000} s`);
+function seconds(ms) { return ms < 1000 ? `${ms} ms` : `${ms / 1000} s`; }
 
 /** A card's refresh rate: the dashboard's (empty value) or its own. */
 function fillIntervalSelect(current) {
@@ -1311,6 +1812,7 @@ function onSensorPicked() {
   const conn = conns.get(editTarget.dev.key);
   const s = conn?.sensors.get($('#w-sensor').value);
   if (!s) return;
+  if (editTarget.osd) { osdSensorPicked(s, conn); return; }
   // Adding: a different sensor brings its own defaults. Editing: keep the settings, refresh the sensor-specific bits.
   // Readings already added to the card stay.
   if (!editTarget.widget) {
@@ -1387,6 +1889,7 @@ function insertIndex(items, sectionId) {
 
 dlgWidget.addEventListener('close', () => {
   if (editTarget) conns.get(editTarget.dev.key)?.setWatchAll(false);
+  if (editTarget?.osd && ['save', 'remove'].includes(dlgWidget.returnValue)) { closeOsdEditor(dlgWidget.returnValue); return; }
   if (dlgWidget.returnValue !== 'save' || !editTarget) return;
   const { dev, widget, sectionId } = editTarget;
   const next = readForm(widget?.id || uid());
@@ -1399,6 +1902,116 @@ dlgWidget.addEventListener('close', () => {
   conns.get(dev.key)?.subscribe();
   editTarget = null;
 });
+
+// ---------- the same window for a reading of the OSD
+let osdForm = { pos: 'tl', stack: 'below', labelFrom: '' };   // the parts of the form that are buttons, not fields
+
+function fillOsdForm(item, sensor) {
+  const look = editTarget.dev.osdLook;
+  osdForm = { pos: item.pos || 'tl', stack: item.stack === 'beside' ? 'beside' : 'below', labelFrom: sensor?.name || '' };
+  $('#w-label').value = typeof item.label === 'string' ? item.label : sensor?.name || '';
+  $('#w-label').placeholder = 'None';
+  syncOsdPlace();
+  $('#o-size').value = item.size || 'm';
+  $('#o-color-own').checked = !!item.color;
+  $('#o-color').value = item.color || look.color;
+  $('#o-color').disabled = !item.color;
+  $('#o-unit-show').checked = !item.hideUnit;
+  $('#w-dec').value = String(item.decimals ?? 0);
+  const fallback = [COLORS.min, COLORS.med, COLORS.max];
+  for (let i = 0; i < 3; i++) {
+    const t = item.thresholds?.[i] || {};
+    $(`#t${i}-v`).value = t.value ?? '';
+    $(`#t${i}-c`).value = t.color || fallback[i];
+  }
+  const choices = unitChoices(sensor);
+  $('#w-unit-field').hidden = !choices;
+  unitShown = choices ? displayUnit(item, sensor) : null;
+  $('#w-unit').replaceChildren(...(choices || []).map((u) => new Option(unitLabel(u), u)));
+  if (choices) $('#w-unit').value = unitShown;
+  // The card-only fields are hidden, but the form still checks the required ones.
+  $('#w-w').value = '1';
+  $('#w-h').value = '1';
+}
+
+function syncOsdPlace() {
+  document.querySelectorAll('#o-pos button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.pos === osdForm.pos)));
+  $('#o-pos-name').textContent = positionName(osdForm.pos);
+  document.querySelectorAll('#o-stack button').forEach((b) => b.classList.toggle('active', b.dataset.stack === osdForm.stack));
+}
+$('#o-pos').addEventListener('click', (e) => {
+  const pos = e.target.closest('button')?.dataset.pos;
+  if (pos) { osdForm.pos = pos; syncOsdPlace(); }
+});
+$('#o-pos').addEventListener('keydown', (e) => {
+  const order = POSITIONS.map(([k]) => k);
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  osdForm.pos = order[(order.indexOf(osdForm.pos) + step + order.length) % order.length];
+  syncOsdPlace();
+  $(`#o-pos button[data-pos="${osdForm.pos}"]`).focus();
+});
+$('#o-stack').addEventListener('click', (e) => {
+  const v = e.target.closest('button')?.dataset.stack;
+  if (v) { osdForm.stack = v; syncOsdPlace(); }
+});
+$('#o-color-own').addEventListener('change', () => { $('#o-color').disabled = !$('#o-color-own').checked; });
+$('#w-remove').onclick = () => dlgWidget.close('remove');
+
+function readOsdForm(id) {
+  const num = (sel) => { const v = $(sel).value; return v === '' ? null : Number(v); };
+  const sensor = conns.get(editTarget.dev.key)?.sensors.get($('#w-sensor').value);
+  return normalizeOsdItem({
+    id,
+    sensor: $('#w-sensor').value,
+    label: $('#w-label').value,
+    pos: osdForm.pos,
+    stack: osdForm.stack,
+    unit: unitChoices(sensor) && $('#w-unit').value !== sensor.unit ? $('#w-unit').value : undefined,
+    decimals: Number($('#w-dec').value),
+    thresholds: [0, 1, 2].map((i) => ({ value: num(`#t${i}-v`), color: $(`#t${i}-c`).value })),
+    color: $('#o-color-own').checked ? $('#o-color').value : undefined,
+    size: $('#o-size').value,
+    hideUnit: !$('#o-unit-show').checked,
+  });
+}
+
+/** Another sensor picked: adding, it brings its own defaults (the place, size and colour stay); editing, the settings stay. */
+function osdSensorPicked(s, conn) {
+  const cur = readOsdForm(editTarget.widget?.id);
+  if (!cur) return;
+  if (!editTarget.widget) {
+    fillOsdForm({ ...osdDefaultsFor(s, conn.catalog), pos: cur.pos, stack: cur.stack, size: cur.size, color: cur.color, hideUnit: cur.hideUnit }, s);
+    return;
+  }
+  if (cur.label === osdForm.labelFrom) cur.label = s.name;   // it was named after the old sensor: name it after this one
+  if (!unitChoices(s)?.includes(cur.unit)) delete cur.unit;
+  fillOsdForm({ ...cur, sensor: s.id }, s);
+}
+
+function closeOsdEditor(how) {
+  const { dev, widget } = editTarget;
+  const next = how === 'save' ? readOsdForm(widget?.id || uid()) : null;
+  editTarget = null;
+  let items = dev.layouts.osd;
+  const old = widget && items.find((x) => x.id === widget.id);
+  if (how === 'remove') {
+    if (old) dev.layouts.osd = removeOsdItem(items, old);
+  } else {
+    if (!next) return;
+    if (old && old.pos === next.pos) items = items.map((x) => (x === old ? next : x));
+    else {
+      // A new reading, or one moved to another place: it goes at the end of that place.
+      if (old) items = removeOsdItem(items, old);
+      items = [...items, next].slice(0, MAX_OSD_ITEMS);
+    }
+    dev.layouts.osd = items;
+  }
+  saveLayout(dev);
+  renderPage(dev);
+  conns.get(dev.key)?.subscribe();
+}
 
 // ---------- settings
 const dlgSettings = $('#dlg-settings');
@@ -1571,7 +2184,8 @@ $('#btn-open-api').onclick = () => { const dev = state.devices[active]; if (dev)
 function showApi(dev, { scope, tab } = {}) {
   const conn = conns.get(dev.key);
   if (!conn?.device.token) { alert(`Sign in to ${dev.name} first.`); return; }
-  openApi(dev, conn, { scope, tab, layout: layoutMode() === 'phone' && dev.layouts.phone ? 'phone' : undefined });
+  const mode = layoutMode();
+  openApi(dev, conn, { scope: scope || (mode === 'osd' ? { kind: 'osd' } : undefined), tab, layout: mode === 'phone' && dev.layouts.phone ? 'phone' : undefined });
 }
 
 // ---------- history: tap a card for its sensor's last 1 to 30 days
@@ -1861,22 +2475,27 @@ function renderLayouts() {
   const dev = layoutsDev;
   if (!dev) return;
   const which = layoutsWhich;
+  const osd = which === 'osd';
   const items = layoutItems(dev, which);
+  const what = (n) => `${n} ${osd ? 'reading' : 'card'}${n === 1 ? '' : 's'}`;
   $('#l-sub').textContent = dev.name;
   document.querySelectorAll('#l-which button').forEach((b) => b.classList.toggle('active', b.dataset.which === which));
   const cards = items.filter((x) => !isSection(x)).length;
-  $('#l-which-hint').textContent = `${which === 'phone' ? 'Phone' : 'Desktop'} layout of ${dev.name}: ${cards} card${cards === 1 ? '' : 's'}`
+  $('#l-which-hint').textContent = `${osd ? 'OSD' : which === 'phone' ? 'Phone layout' : 'Desktop layout'} of ${dev.name}: ${what(cards)}`
     + (which === 'phone' && !dev.layouts.phone ? ', the same as the desktop layout until changed.' : '.')
-    + (which !== layoutMode() ? ` This screen shows the ${layoutMode()} layout.` : '');
+    + (osd ? ' A saved OSD keeps its settings (font, colours, shortcut…) too.' : '')
+    + (which !== layoutMode() ? ` This screen shows the ${LAYOUT_NAME[layoutMode()]}.` : '');
 
   const list = $('#l-list');
   list.replaceChildren();
   const current = dev.current[which];
   const here = layoutShape(items);
-  for (const x of dev.saved) {
+  // OSD layouts and card layouts are listed apart (the desktop and phone ones fit either).
+  const saved = dev.saved.filter((x) => (x.mode === 'osd') === osd);
+  for (const x of saved) {
     const li = document.createElement('li');
     const inUse = x.id === current;
-    const changed = inUse && layoutShape(x.items) !== here;
+    const changed = inUse && (layoutShape(x.items) !== here || (osd && JSON.stringify(x.look) !== JSON.stringify(dev.osdLook)));
     const n = x.items.filter((i) => !isSection(i)).length;
     li.className = inUse ? 'in-use' : '';
     li.innerHTML = `<button class="pick" type="button" title="Switch to this layout"><span class="grow"><strong></strong><span class="sub"></span></span></button>
@@ -1891,20 +2510,21 @@ function renderLayouts() {
         <button type="button" data-a="delete" class="danger">Delete</button>
       </span>`;
     $('strong', li).textContent = x.name;
-    $('.sub', li).textContent = `${x.mode === 'phone' ? 'Phone' : 'Desktop'} · ${n} card${n === 1 ? '' : 's'}${inUse ? (changed ? ' · in use, changed since' : ' · in use') : ''}`;
+    $('.sub', li).textContent = `${{ phone: 'Phone', osd: 'OSD' }[x.mode] || 'Desktop'} · ${what(n)}${inUse ? (changed ? ' · in use, changed since' : ' · in use') : ''}`;
     $('.pick', li).onclick = () => {
       if (inUse && !changed) return;
       if (changed && !confirm(`Switch back to "${x.name}" as saved? The changes made since are dropped (Undo in edit mode brings them back).`)) return;
-      applyLayout(dev, which, x.items, x.id);
+      applyLayout(dev, which, x.items, x.id, x.look);
       showLayoutResult(`Switched to "${x.name}".`);
       if (which === layoutMode()) dlgLayouts.close();
     };
     const more = $('.more', li);
     li.querySelector('[data-a="more"]').onclick = (e) => { more.hidden = !more.hidden; e.currentTarget.setAttribute('aria-expanded', String(!more.hidden)); };
-    li.querySelector('[data-a="update"]')?.addEventListener('click', () => { x.items = structuredClone(items); x.savedAt = Date.now(); saveLayout(dev, { track: false }); renderLayouts(); });
+    const keep = () => { x.items = structuredClone(items); if (osd) x.look = structuredClone(dev.osdLook); x.savedAt = Date.now(); };
+    li.querySelector('[data-a="update"]')?.addEventListener('click', () => { keep(); saveLayout(dev, { track: false }); renderLayouts(); });
     li.querySelector('[data-a="overwrite"]').onclick = () => {
-      if (!confirm(`Replace "${x.name}" with the ${which} layout you have now?`)) return;
-      x.items = structuredClone(items); x.mode = which; x.savedAt = Date.now();
+      if (!confirm(`Replace "${x.name}" with the ${LAYOUT_NAME[which]} you have now?`)) return;
+      keep(); x.mode = which;
       dev.current[which] = x.id;
       saveLayout(dev, { track: false }); renderLayouts();
     };
@@ -1915,25 +2535,29 @@ function renderLayouts() {
       saveLayout(dev, { track: false }); renderLayouts();
     };
     li.querySelector('[data-a="export"]').onclick = () => download(
-      exportLayout({ dev, which: x.mode, items: x.items, name: x.name, catalog: conns.get(dev.key)?.catalog }), fileName(dev.name, x.name));
+      exportLayout({ dev, which: x.mode, items: x.items, name: x.name, catalog: conns.get(dev.key)?.catalog, look: x.look }), fileName(dev.name, x.name));
     li.querySelector('[data-a="delete"]').onclick = () => {
       if (!confirm(`Delete the saved layout "${x.name}"? The dashboard itself stays as it is.`)) return;
       dev.saved = dev.saved.filter((y) => y !== x);
-      for (const k of ['desktop', 'phone']) if (dev.current[k] === x.id) dev.current[k] = null;
+      for (const k of ['desktop', 'phone', 'osd']) if (dev.current[k] === x.id) dev.current[k] = null;
       saveLayout(dev, { track: false }); renderLayouts();
     };
     list.append(li);
   }
-  $('#l-empty').hidden = dev.saved.length > 0;
+  $('#l-empty').hidden = saved.length > 0;
   $('#l-save button').disabled = dev.saved.length >= MAX_SAVED;
 }
 
-/** Makes `items` one of a PC's layouts (an undoable step when it's the layout on screen). */
-function applyLayout(dev, which, items, savedId = null) {
-  const copy = normalizeItems(structuredClone(items));
-  if (which === layoutMode()) dev.widgets = copy;
-  else if (which === 'phone') dev.layouts.phone = copy;
-  else dev.layouts.desktop = copy;
+/** Makes `items` one of a PC's layouts (an undoable step when it's the layout on screen); an OSD also takes its look. */
+function applyLayout(dev, which, items, savedId = null, look = null) {
+  if (which === 'osd') {
+    dev.layouts.osd = normalizeLayouts([], null, structuredClone(items)).osd;
+    if (look) dev.osdLook = normalizeOsdLook(look);
+  } else {
+    const copy = normalizeItems(structuredClone(items));
+    if (which === 'phone') dev.layouts.phone = copy;
+    else dev.layouts.desktop = copy;
+  }
   dev.current[which] = savedId;
   saveLayout(dev, { adopt: false, track: which === layoutMode() });
   renderPage(dev);
@@ -1955,6 +2579,7 @@ $('#l-save').addEventListener('submit', (e) => {
   if (same && !confirm(`Replace the saved layout "${same.name}"?`)) return;
   const entry = same || { id: uid(), name, mode: layoutsWhich };
   entry.items = structuredClone(layoutItems(dev, layoutsWhich));
+  if (layoutsWhich === 'osd') entry.look = structuredClone(dev.osdLook);
   entry.savedAt = Date.now();
   if (!same) dev.saved.push(entry);
   dev.current[layoutsWhich] = entry.id;
@@ -1968,8 +2593,10 @@ $('#l-export').onclick = () => {
   const dev = layoutsDev;
   if (!dev) return;
   const savedName = dev.saved.find((x) => x.id === dev.current[layoutsWhich])?.name;
-  download(exportLayout({ dev, which: layoutsWhich, items: layoutItems(dev, layoutsWhich), name: savedName, catalog: conns.get(dev.key)?.catalog }),
-    fileName(dev.name, layoutsWhich));
+  download(exportLayout({
+    dev, which: layoutsWhich, items: layoutItems(dev, layoutsWhich), name: savedName, catalog: conns.get(dev.key)?.catalog,
+    look: layoutsWhich === 'osd' ? dev.osdLook : null,
+  }), fileName(dev.name, layoutsWhich));
 };
 
 $('#l-import').onchange = async (e) => {
@@ -1982,12 +2609,19 @@ $('#l-import').onchange = async (e) => {
     const data = JSON.parse(await file.text());
     const got = readLayoutFile(data, { serverId: dev.serverId, which: layoutsWhich });
     if (!conn?.catalog.length) throw new Error(`Connect to ${dev.name} first, so its sensors can be matched.`);
-    const { items, missing } = remapLayout(normalizeItems(got.items), got.sensors, conn.catalog);
+    // Cards imported into the OSD become readings (top left, a line each), OSD readings imported as a layout cards.
+    const osd = layoutsWhich === 'osd';
+    const raw = !osd && got.which === 'osd'
+      ? got.items.map(({ id, sensor, label, unit, decimals, thresholds }) => ({ id, sensor, label: label || undefined, unit, decimals, thresholds }))
+      : got.items;
+    const { items, missing } = remapLayout(osd ? normalizeOsdItems(raw) : normalizeItems(raw), got.sensors, conn.catalog);
     const cards = items.filter((x) => !isSection(x)).length;
     if (!cards && !items.length) throw new Error('That layout is empty.');
-    applyLayout(dev, layoutsWhich, items, null);
-    showLayoutResult(`Imported ${cards} card${cards === 1 ? '' : 's'} from ${got.from}'s ${got.which} layout into the ${layoutsWhich} layout of ${dev.name}.`
-      + (missing.length ? ` ${missing.length} reading${missing.length === 1 ? ' is' : 's are'} not on this PC: ${missing.slice(0, 4).join(', ')}${missing.length > 4 ? '…' : ''}. Those cards show "unavailable" until you pick another sensor in their editor.` : ''));
+    // An OSD's look comes along, but stays on this PC's screen.
+    applyLayout(dev, layoutsWhich, items, null, osd && got.look ? { ...got.look, screen: dev.osdLook.screen } : null);
+    const word = osd ? 'reading' : 'card';
+    showLayoutResult(`Imported ${cards} ${word}${cards === 1 ? '' : 's'} from ${got.from}'s ${LAYOUT_NAME[got.which] || 'layout'} into the ${LAYOUT_NAME[layoutsWhich]} of ${dev.name}.`
+      + (missing.length ? ` ${missing.length} reading${missing.length === 1 ? ' is' : 's are'} not on this PC: ${missing.slice(0, 4).join(', ')}${missing.length > 4 ? '…' : ''}. Those ${word}s show "unavailable" until you pick another sensor in their editor.` : ''));
   } catch (ex) {
     showLayoutResult(`Import failed: ${ex instanceof SyntaxError ? 'that file is not a layout file.' : ex.message}`);
   }
@@ -2047,12 +2681,13 @@ function toast(text) {
   toastTimer = setTimeout(() => { t.hidden = true; }, 1600);
 }
 
-// ---------- keyboard: F full screen, Esc leaves it; in edit mode Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo
+// ---------- keyboard: F full screen, Esc leaves it; in edit mode and the OSD view Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.matches('input, select, textarea')) return;
   const ctrl = e.ctrlKey || e.metaKey;
-  if (editing && ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undoRedo(e.shiftKey ? 1 : -1); return; }
-  if (editing && ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); undoRedo(1); return; }
+  const edits = editing || layoutMode() === 'osd';   // the OSD view is always editable
+  if (edits && ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undoRedo(e.shiftKey ? 1 : -1); return; }
+  if (edits && ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); undoRedo(1); return; }
   if (ctrl || e.altKey) return;
   if (e.key === 'f' || e.key === 'F') { e.preventDefault(); setFullscreen(!state.fullscreen); }
   else if (e.key === 'Escape' && state.fullscreen) setFullscreen(false);
@@ -2091,6 +2726,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme
 applyTheme();
 syncWakeLock();
 applyPreview();
+applyOsdView();
 
 if (state.fullscreen) setFullscreen(true, { browser: false });
 

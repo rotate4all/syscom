@@ -224,7 +224,7 @@ public static partial class Readings
         };
     }
 
-    private static object SensorRef(string id, SensorInfo? s) => s is null
+    internal static object SensorRef(string id, SensorInfo? s) => s is null
         ? new { id, name = (string?)null, hardware = (string?)null, unit = (string?)null, available = false }
         : new { id, name = (string?)s.Name, hardware = (string?)s.Hardware, unit = (string?)s.Unit, available = true };
 
@@ -248,15 +248,21 @@ public static partial class Readings
     }
 
     /// <summary>The highest threshold the value has reached (the card's colour); null = below them all, or none set.</summary>
-    private static object? Level(JsonElement w, double? v)
+    internal static object? Level(JsonElement w, double? v) =>
+        Reached(w, v) is { } r ? new { step = r.Step, at = r.At, color = r.Color } : null;
+
+    /// <summary>The colour of the highest threshold the value has reached; null = below them all, or none set.</summary>
+    internal static string? LevelColor(JsonElement w, double? v) => Reached(w, v)?.Color;
+
+    private static (string Step, double? At, string? Color)? Reached(JsonElement w, double? v)
     {
         if (v is null || !w.TryGetProperty("thresholds", out var ts) || ts.ValueKind != JsonValueKind.Array) return null;
-        object? reached = null;
+        (string, double?, string?)? reached = null;
         foreach (var (t, i) in ts.EnumerateArray().Select((t, i) => (t, i))
                      .Where(x => x.t.ValueKind == JsonValueKind.Object && Num(x.t, "value") is not null)
                      .OrderBy(x => Num(x.t, "value")))
         {
-            if (v >= Num(t, "value")) reached = new { step = new[] { "min", "med", "max" }.ElementAtOrDefault(i) ?? "max", at = Num(t, "value"), color = Str(t, "color") };
+            if (v >= Num(t, "value")) reached = (new[] { "min", "med", "max" }.ElementAtOrDefault(i) ?? "max", Num(t, "value"), Str(t, "color"));
         }
         return reached;
     }
@@ -273,7 +279,7 @@ public static partial class Readings
         ["B/s"] = 1, ["KB/s"] = 1L << 10, ["MB/s"] = 1L << 20, ["GB/s"] = 1L << 30, ["Mbit/s"] = 125_000,
     };
 
-    private static string DisplayUnit(JsonElement w, SensorInfo? s)
+    internal static string DisplayUnit(JsonElement w, SensorInfo? s)
     {
         var native = s?.Unit ?? "";
         var chosen = Str(w, "unit");
@@ -283,7 +289,7 @@ public static partial class Readings
         return ok ? chosen : native;
     }
 
-    private static double UnitFactor(string? from, string to)
+    internal static double UnitFactor(string? from, string to)
     {
         if (from is null) return 1;
         if (SizeUnits.TryGetValue(from, out var a) && SizeUnits.TryGetValue(to, out var b)) return a / b;
@@ -294,18 +300,23 @@ public static partial class Readings
     /// <summary>Like the dashboard shows it: "37 %", "7.4 GB", data rates scaled to fit ("12.5 MB/s").</summary>
     public static string Format(double? v, string unit, int decimals)
     {
-        if (v is not { } x) return "–";
-        string n;
+        if (v is null) return "–";
+        var (n, u) = FormatParts(v, unit, decimals);
+        return u.Length > 0 ? $"{n} {u}" : n;
+    }
+
+    /// <summary><see cref="Format"/> as number and unit apart ("12.5", "MB/s"); "–" for no reading.</summary>
+    public static (string Number, string Unit) FormatParts(double? v, string unit, int decimals)
+    {
+        if (v is not { } x) return ("–", unit == "B/s" ? "" : unit);
         if (unit == "B/s")
         {
             string[] steps = ["B/s", "KB/s", "MB/s", "GB/s"];
             var i = 0;
             while (Math.Abs(x) >= 1024 && i < steps.Length - 1) { x /= 1024; i++; }
-            n = x.ToString(i == 0 ? "F0" : "F1", CultureInfo.InvariantCulture);
-            unit = steps[i];
+            return (x.ToString(i == 0 ? "F0" : "F1", CultureInfo.InvariantCulture), steps[i]);
         }
-        else n = x.ToString("F" + decimals, CultureInfo.InvariantCulture);
-        return unit.Length > 0 ? $"{n} {unit}" : n;
+        return (x.ToString("F" + Math.Clamp(decimals, 0, 6), CultureInfo.InvariantCulture), unit);
     }
 
     private static string ReadingText(double? v, string unit)
@@ -359,7 +370,7 @@ public static partial class Readings
     public static string? Str(JsonElement e, string name) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    private static double? Num(JsonElement e, string name)
+    internal static double? Num(JsonElement e, string name)
     {
         if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var v)) return null;
         if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d)) return d;

@@ -311,6 +311,19 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/dashboard/background -H "X-API-Key: $SECRET")" = "404"
           curl -sf -X PUT localhost:47810/api/devices -H "X-API-Key: $FULL" -H 'content-type: application/json' -d '{"devices":[]}' | jq -e '.rev == 2'
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/keys -H "X-API-Key: $FULL")" = "401"
+          # A PC without HTTPS in the list of PCs (httpsPort null) is kept too
+          curl -sf -X PUT localhost:47810/api/devices -H "X-API-Key: $FULL" -H 'content-type: application/json' \
+            -d '{"devices":[{"id":"fedcba9876543210","name":"No HTTPS","url":"http://192.168.1.21:47810","httpsPort":null}]}' | jq -e '.rev == 3'
+          # The on-screen display: its readings in the dashboard (kept by a save without them), shown or hidden by the API
+          jq -c '. + {osd: [{id: "o1", sensor: "/mock/cpu/temperature/0", label: "CPU", pos: "tr"}, {id: "o2", sensor: "/mock/cpu/load/0", label: "", pos: "tr", stack: "beside"}], osdLook: {hotkey: "ctrl+alt+f9"}}' \
+            "$RUNNER_TEMP/dash.json" > "$RUNNER_TEMP/dash-osd.json"
+          curl -sf -X PUT localhost:47810/api/dashboard -H "X-API-Key: $FULL" -H 'content-type: application/json' --data-binary @"$RUNNER_TEMP/dash-osd.json" | jq -e '.rev == 3'
+          curl -sf -X PUT localhost:47810/api/dashboard -H "X-API-Key: $FULL" -H 'content-type: application/json' --data-binary @"$RUNNER_TEMP/dash.json" | jq -e '.rev == 4'
+          curl -sf localhost:47810/api/osd -H "X-API-Key: $SECRET" | jq -e '.shown == false and .hotkey == "Ctrl+Alt+F9" and .tray.running == false and (.elements | length) == 2 and .elements[0].unit == "°C" and .elements[1].stack == "beside" and .elements[1].label == ""'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:47810/api/osd/show -H "X-API-Key: $SECRET")" = "401"
+          curl -sf -X POST localhost:47810/api/osd/toggle -H "X-API-Key: $FULL" | jq -e '.shown == true'
+          curl -sf 'localhost:47810/api/osd?readings=false' -H "X-API-Key: $SECRET" | jq -e '.shown == true and .elements == null'
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/admin/osd)" = "403"
           curl -sf -X DELETE "localhost:47810/api/keys/$KID" -H "authorization: Bearer $TOKEN" > /dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:47810/api/values -H "X-API-Key: $SECRET")" = "401"
           # Several refresh rates on one WebSocket (cards with their own polling interval)

@@ -8,6 +8,41 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.19.0] - 2026-11-15
+
+### Added
+- **On-screen display (OSD)**: readings drawn over games and everything else on the PC's own screen, for when there's
+  no second screen or phone to put the dashboard on. It's each PC's third layout, next to the desktop and phone
+  ones, with readings of its own, and is set up in the dashboard's new **OSD view** (the screen button in the top
+  bar). That view shows a picture of the PC's screen (its real shape, from the tray app) with the readings where
+  they go, on a game-like scene, dark or light, and stays live.
+  - Each reading goes in one of 8 places: the corners, the middle of each edge (top, bottom, left and right) except
+    the center of the screen, which is left to the game. In each place it goes **under** the reading before it (a new
+    line) or **beside** it (on the same line), so CPU temperature, load and power can share a line in the top left
+    while the frame rate, native frame rate and frame time stack in the top right. Drag a reading onto another one to
+    put it beside it, under a line for a new line, or to another place; click it to change it.
+  - Per reading: sensor (the same live picker as cards), label (or none), size (5 steps), its own colour or the
+    OSD's, thresholds that colour the number, unit shown or hidden, unit (GB/MB…), decimals.
+  - For the whole OSD: font (the fonts installed on that PC), bold, size, number colour, label and unit colour,
+    transparency, a backdrop behind each group (opacity and colour), outline, shadow or neither, distance from the
+    screen's edges, which screen, refresh rate (500 ms to 5 s), and the **shortcut** that shows and hides it
+    (**Ctrl+Shift+S** by default; record any other, or none). Changes show in the preview as you make them.
+  - **Suggested OSD**: CPU and GPU temperature, load and power on a line each, VRAM and RAM top left; FPS (larger),
+    native frame rate and frame time top right.
+  - Shown or hidden from the shortcut, the tray menu (**On-screen display**), the switch in the OSD view or the API
+    (`POST /api/osd/show`, `/hide`, `/toggle`); it stays that way after a restart. `GET /api/osd` returns it with
+    what each reading shows now ([API](docs/API.md#on-screen-display)).
+  - Saved layouts, export and import, undo and redo work for the OSD too (an OSD keeps its settings with it).
+  - The tray app draws it (the service can't draw on your screen): one small window per place, always on top, that
+    clicks and keys go through and that never takes the focus, so a game isn't interrupted. Nothing is injected into
+    games. Games in **exclusive full screen** don't show it; borderless or windowed full screen (most games today)
+    do. The SYSCOM tray app must be running, as it is after sign-in. Hidden, it costs nothing: the sensors are only
+    read for it while it shows.
+
+### Fixed
+- **Saving the list of PCs failed** (HTTP 500) when a PC in it had HTTPS turned off, so the list wasn't kept on the
+  PC that served the dashboard.
+
 ## [0.18.4] - 2026-11-14
 
 ### Fixed

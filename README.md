@@ -27,7 +27,7 @@ It's light enough to leave running while you game, even with the dashboard refre
 
 > The screenshots use SYSCOM's built-in mock sensors (`--mock`); on a real PC you see your own hardware names.
 
-**Contents:** [Highlights](#highlights) · [The dashboard](#the-dashboard) · [API](#api) ·
+**Contents:** [Highlights](#highlights) · [The dashboard](#the-dashboard) · [On-screen display](#on-screen-display) · [API](#api) ·
 [Light on your PC](#light-on-your-pc) · [What it monitors](#what-it-monitors) · [Install](#install) ·
 [Using it](#using-it) · [Phone app](#install-it-as-a-phone-app) · [Updating](#updating) ·
 [Building](#building-from-source) · [Roadmap](#roadmap)
@@ -41,6 +41,8 @@ It's light enough to leave running while you game, even with the dashboard refre
 - **A dashboard you design**, per PC and saved on that PC, with separate desktop and phone layouts.
   [Five card types, five gauge styles](#cards), sections, drag and resize, thresholds with colours, and each card
   refreshing at its own pace.
+- **An on-screen display** for playing on a single screen: readings drawn over your games, in any corner or edge,
+  on lines or side by side, in your font and colours, shown and hidden with **Ctrl+Shift+S**. [More](#on-screen-display)
 - **30 days of history** for every sensor, one tap away.
 - **An API with keys** for scripts, Home Assistant, a Stream Deck or a Raspberry Pi display. Every card, section
   and dashboard has an **API** button with ready-to-run examples.
@@ -88,7 +90,8 @@ Every card also has:
 - **A suggested layout** to start from: CPU, GPU, FPS with native frame rate and frame time, VRAM, RAM, drives and
   network, picked from the sensors your PC actually has.
 - **Desktop and phone layouts** per PC, each with its own cards and sections. The phone layout starts as a copy of
-  the desktop one; the phone preview on a PC lets you prepare it at phone width.
+  the desktop one; the phone preview on a PC lets you prepare it at phone width. The
+  [on-screen display](#on-screen-display) is a third one.
 - **Saved layouts**: save the layout on screen under a name (say *Gaming* and *Work*) and switch with one click.
 - **Export and import** one layout to a file. Importing on another PC matches each reading to that PC's sensors.
 - **Undo and redo** the last 5 edits (Ctrl+Z, Ctrl+Y).
@@ -109,6 +112,42 @@ Every card also has:
 Tap any card for a chart of the last 1, 3, 7, 14 or 30 days: the average as a line, the lowest to highest reading
 as a band, and exact values when you hover or touch it. Every sensor is kept for 30 days, whether or not it's on a card
 (about 75 MB on disk for 600 sensors).
+
+## On-screen display
+
+No second screen or spare phone? The OSD puts readings over your game on the PC's own screen. It's each PC's third
+layout, next to the desktop and phone ones: open the dashboard, click the screen button in the top bar (**OSD
+view**), and lay it out on a picture of that PC's screen. Changes show up on the PC as you make them.
+
+<p align="center">
+  <img src="docs/images/osd-view.png" width="820" alt="The OSD view: a picture of the PC's screen over a game-like scene, with CPU and GPU temperature, load and power, VRAM and RAM in the top left and FPS, native frame rate and frame time in the top right; the switch that shows it on the PC and its shortcut, Ctrl+Shift+S, above">
+</p>
+
+- **Anywhere on the screen**: each reading goes in a corner or in the middle of an edge (top, bottom, left, right),
+  **under** the reading before it or **beside** it. Temperatures in the top left and the frame rate in the top right,
+  say, with temperature, load and power side by side on one line. Drag a reading onto another one to put it beside
+  it, under a line to start a new line, or to another place; click it to change it.
+- **Each reading**: any sensor, with its own label (or none), size, colour, thresholds that colour the number, unit
+  and decimals.
+- **The look**: any font installed on the PC, bold or not, size, colours for numbers and for labels, transparency,
+  a backdrop behind each group, an outline or a shadow so it stays legible over bright scenes, the distance from the
+  screen's edges, which screen, and how often it refreshes (500 ms to 5 s).
+- **Ctrl+Shift+S shows and hides it**, in games too. Pick any other shortcut in the OSD settings (it takes over that
+  key combination, Ctrl+Shift+S is *Save as* in many apps), or none. The tray menu's **On-screen display**, the
+  switch in the OSD view and the API (`POST /api/osd/toggle`) do the same.
+- **Suggested OSD** starts you off; saved layouts, export and import, undo and redo work as for the dashboard.
+
+<p align="center">
+  <img src="docs/images/osd-settings.png" width="410" alt="OSD settings: font, size, colours, transparency, backdrop, text edge, distance from the edges, screen, refresh and shortcut, with the preview updating behind the window">
+  &nbsp;
+  <img src="docs/images/osd-reading.png" width="410" alt="An OSD reading's settings: its label, its place on the screen on a 3 by 3 grid, under or beside the reading before it, size, own colour, unit, decimals and thresholds">
+</p>
+
+The SYSCOM tray app draws the OSD, so it shows while the tray app runs (it starts when you sign in). It's a set of
+small windows that stay on top, let every click and key through and never take the focus; nothing is injected into
+games, so it's safe with anti-cheat. Games in **exclusive full screen** own the screen and hide it: choose
+*borderless* or *windowed* full screen in the game's settings (most games today use that anyway). While it's hidden
+it costs nothing; while it shows, the PC reads the sensors at the OSD's refresh rate, as for an open dashboard.
 
 ## API
 
@@ -136,8 +175,9 @@ The full reference, generated from the same source as the in-app one, is in [doc
 
 SYSCOM is built to stay out of the way of the games and work it monitors:
 
-- **Nothing is drawn on the monitored PC.** No window to repaint, no overlay, nothing hooked into games. The
-  dashboard runs on the phone or browser that shows it; the PC only reads sensors and sends small JSON frames.
+- **Nothing is drawn on the monitored PC** unless you turn the on-screen display on, and nothing is ever hooked
+  into games. The dashboard runs on the phone or browser that shows it; the PC only reads sensors and sends small
+  JSON frames.
 - **One reading for everyone.** However many dashboards are open, the PC reads its sensors once per interval (the
   fastest any card asks for) and sends each dashboard only the sensors its cards show.
 - **Quiet when nobody's watching.** With no dashboard open, it reads every 2 s for the history (or not at all, with
@@ -247,6 +287,8 @@ drivers had security issues). GPU, load, memory, disk and network sensors work w
   ✎ edits it, `</>` opens its API window and 🗑 removes it. **+ Add section** adds a titled group.
 - **Refresh rate:** Settings → per device, *Every …* (500 ms to 10 s; 1 s by default). A card's own *Refresh* in
   its editor overrides it for that card.
+- **On-screen display:** the screen button shows each PC's OSD on a picture of its screen; Ctrl+Shift+S on the PC
+  shows and hides it (see [On-screen display](#on-screen-display)).
 - **Phone layout:** on a PC, the phone button next to the pencil shows and edits the phone layout at phone width
   (4 cells across). It becomes separate from the desktop one with the first change made there; **↺ Use the desktop
   layout** in edit mode goes back.
@@ -254,7 +296,7 @@ drivers had security issues). GPU, load, memory, disk and network sensors work w
 - **More PCs:** Settings → *Add device*. PCs found on your network are listed, or you can type an address. Swipe
   left or right (or use the arrow keys) to switch.
 - **Layouts:** the layers button saves the layout on screen under a name, switches between saved layouts, and
-  exports or imports one layout (desktop or phone) of the PC on screen.
+  exports or imports one layout (desktop, phone or OSD) of the PC on screen.
 - **Appearance:** Settings → *Appearance…* (or in edit mode) sets the background, card transparency, corners and
   animations.
 - **API keys:** Settings → *API keys and reference…*, or any API window.

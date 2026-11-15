@@ -174,14 +174,34 @@ export class Connection extends EventTarget {
     return r.json();
   }
 
-  /** This PC's dashboard: { rev, widgets (desktop), phone (null = same as desktop), look, saved, current } (rev 0 = none saved yet). */
+  /** This PC's dashboard: { rev, widgets (desktop), phone (null = same as desktop), look, saved, current, osd, osdLook } (rev 0 = none saved yet). */
   loadDashboard() { return this.api('/api/dashboard'); }
 
-  /** Saves the dashboard on the PC (both layouts, look, saved layouts); resolves to the new revision. */
+  /** Saves the dashboard on the PC (the three layouts, look, saved layouts, the OSD's look); resolves to the new revision. */
   async saveDashboard(dev) {
-    const body = JSON.stringify({ widgets: dev.layouts.desktop, phone: dev.layouts.phone, look: dev.look, saved: dev.saved, current: dev.current });
+    const body = JSON.stringify({
+      widgets: dev.layouts.desktop, phone: dev.layouts.phone, look: dev.look, saved: dev.saved, current: dev.current,
+      osd: dev.layouts.osd, osdLook: dev.osdLook,
+    });
     return (await this.api('/api/dashboard', { method: 'PUT', body })).rev;
   }
+
+  /**
+   * The on-screen display on this PC: { shown, hotkey, tray: { running, hotkeyRegistered, hotkeyError, screens } }
+   * (without readings: the dashboard has its own). { unsupported: true } from a PC older than 0.19.
+   */
+  async osdStatus() {
+    try { return await this.api('/api/osd?readings=false'); } catch (ex) {
+      if (/HTTP 404/.test(ex.message)) return { unsupported: true };
+      throw ex;
+    }
+  }
+
+  /** The fonts installed on the PC (its tray app reports them); [] when that isn't known. */
+  async osdFonts() { return (await this.api('/api/osd/fonts')).fonts || []; }
+
+  /** Shows or hides the on-screen display on the PC's screen; resolves to whether it shows now. */
+  async setOsdShown(on) { return (await this.api(`/api/osd/${on ? 'show' : 'hide'}`, { method: 'POST' })).shown; }
 
   /** The dashboard's background picture as a Blob, or null. */
   async loadBackground() {
@@ -279,6 +299,7 @@ export class Connection extends EventTarget {
 
   /** A card's sensor, its extra readings, and the sensors that give it a live scale maximum (e.g. total VRAM). */
   sensorsOf(w) {
+    if (!w.type) return [w.sensor];   // a reading of the OSD
     return [w.sensor, ...(w.extra || []).map((x) => x.sensor), ...(effectiveMaxFrom(w, this.sensors.get(w.sensor), this.catalog) || [])];
   }
 
@@ -322,6 +343,9 @@ export class Connection extends EventTarget {
         break;
       case 'devices':
         this.emit('devices', { rev: m.rev });
+        break;
+      case 'osd':
+        this.emit('osd', { rev: m.rev, shown: !!m.shown });
         break;
     }
   }

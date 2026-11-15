@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using Syscom.Shared;
+using Syscom.Tray.Osd;
 
 namespace Syscom.Tray;
 
@@ -80,10 +81,12 @@ internal sealed class TrayContext : ApplicationContext
     private bool _restartingTray;
     private IntPtr _taskbar = Taskbar.Handle;
     private readonly RegisteredWaitHandle _showWait;
+    private readonly OsdOverlay _osd;
 
     public TrayContext(bool openWindow, bool atSignIn, EventWaitHandle show)
     {
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip { ShowItemToolTips = true };
+        _osd = new OsdOverlay(_client);
         // Another start of the tray app (Start menu → SYSCOM) asks this one to show its window.
         var ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _showWait = ThreadPool.RegisterWaitForSingleObject(show, (_, _) => ui.Post(_ => ShowWindow(), null), null, Timeout.Infinite, executeOnlyOnce: false);
@@ -91,6 +94,16 @@ internal sealed class TrayContext : ApplicationContext
         menu.Items.Add("Open dashboard", null, (_, _) => OpenDashboard());
         menu.Items.Add("Set up phone…", null, async (_, _) => await Try(async () => { await PhoneSetupForm.ShowAsync(_client); return ""; }));
         menu.Items.Add("Manage SYSCOM…", null, (_, _) => ShowWindow());
+        // The on-screen display over games; its readings, look and shortcut are set in the dashboard's OSD view.
+        var osdItem = new ToolStripMenuItem("On-screen display", null, async (_, _) => await _osd.ToggleAsync(!_osd.Shown));
+        menu.Items.Add(osdItem);
+        menu.Opening += (_, _) =>
+        {
+            osdItem.Checked = _osd.Shown;
+            osdItem.ShortcutKeyDisplayString = _osd.HotkeyWorks ? _osd.Hotkey : null;
+            osdItem.ToolTipText = _osd.Hotkey.Length == 0 ? "No shortcut set (dashboard → OSD view → Settings)"
+                : _osd.HotkeyWorks ? $"Show or hide it anywhere with {_osd.Hotkey}" : $"{_osd.Hotkey} doesn't work: another app uses it";
+        };
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Check for updates", null, async (_, _) => { ShowWindow(); await _form!.CheckForUpdatesAsync(); });
         var style = new ToolStripMenuItem("Tray icon");
@@ -243,6 +256,7 @@ internal sealed class TrayContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         _showWait.Unregister(null);
+        _osd.Dispose();
         TraySettings.Changed -= Redraw;
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnPreferenceChanged;
         _timer.Dispose();

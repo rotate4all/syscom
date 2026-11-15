@@ -6,6 +6,7 @@ using Syscom.Server.Config;
 using Syscom.Server.Dashboards;
 using Syscom.Server.Discovery;
 using Syscom.Server.History;
+using Syscom.Server.Osd;
 using Syscom.Server.Relay;
 using Syscom.Server.Sensors;
 using Syscom.Server.Streaming;
@@ -135,6 +136,9 @@ builder.Services.AddSingleton(sp => new DeviceListStore(dataDir, sp.GetRequiredS
 builder.Services.AddSingleton(new BackgroundStore(dataDir));
 builder.Services.AddSingleton(sp => new ApiKeyStore(dataDir, sp.GetRequiredService<ILogger<ApiKeyStore>>()));
 builder.Services.AddSingleton<ApiAccess>();
+// The on-screen display the tray app draws over games: shown or hidden, and what the tray app reports.
+builder.Services.AddSingleton(sp => new OsdService(sp.GetRequiredService<SensorHub>(), sp.GetRequiredService<DashboardStore>(),
+    cfg, dataDir, sp.GetRequiredService<ILoggerFactory>().CreateLogger("OSD")));
 builder.Services.AddSingleton<LanDiscovery>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LanDiscovery>());
 
@@ -164,6 +168,7 @@ var deviceList = app.Services.GetRequiredService<DeviceListStore>();
 var backgrounds = app.Services.GetRequiredService<BackgroundStore>();
 var access = app.Services.GetRequiredService<ApiAccess>();
 var apiKeys = app.Services.GetRequiredService<ApiKeyStore>();
+var osd = app.Services.GetRequiredService<OsdService>();
 if (cfg.HistoryEnabled) hub.Polled += history.Add;
 // A sensor read that stopped answering (a hardware driver) doesn't come back by itself: restart SYSCOM, as the tray
 // app's Restart server does. If that can't start, stop with an error, which Windows' recovery settings restart.
@@ -346,7 +351,7 @@ app.Map("/ws", async (HttpContext ctx) =>
         await ws.CloseAsync((System.Net.WebSockets.WebSocketCloseStatus)MetricsSession.CloseUnauthorized, "unauthorized", ctx.RequestAborted);
         return;
     }
-    await new MetricsSession(ws, hub, dashboards, deviceList).RunAsync(ctx.RequestAborted, app.Lifetime.ApplicationStopping);
+    await new MetricsSession(ws, hub, dashboards, deviceList, osd).RunAsync(ctx.RequestAborted, app.Lifetime.ApplicationStopping);
 });
 
 // ---- certificate for phones (public: it's a CA certificate, no secrets)
@@ -361,10 +366,11 @@ app.MapGet("/tls/syscom.mobileconfig", () => tls is null
 var mgmt = api.MapGroup("/admin").AddEndpointFilter(async (ctx, next) =>
     admin.IsAuthorized(ctx.HttpContext) ? await next(ctx) : Results.StatusCode(StatusCodes.Status403Forbidden));
 
+// Clients: browsers and scripts streaming readings (the on-screen display isn't one).
 mgmt.MapGet("/status", () => Results.Ok(new ServerStatus(
     cfg.Name, version, cfg.Port,
     LanDiscovery.LocalAddresses().Select(ip => $"http://{ip}:{cfg.Port}").ToList(),
-    hub.Clients, hub.Catalog.Count, WindowsServiceHelpers.IsService(), cfg.UpdateFeedUrl, components.LastUpdate,
+    Math.Max(0, hub.Clients - osd.Leases), hub.Catalog.Count, WindowsServiceHelpers.IsService(), cfg.UpdateFeedUrl, components.LastUpdate,
     tls is not null ? cfg.HttpsPort : null, tls?.CaFingerprint)));
 
 mgmt.MapGet("/components", () => Results.Ok(components.Status()));
@@ -401,6 +407,9 @@ mgmt.MapPost("/password", (PasswordRequest body) =>
 });
 
 mgmt.MapPost("/restart", () => Results.Ok(components.Restart()));
+
+// The on-screen display: for the dashboard and scripts (/api/osd…) and the tray app that draws it (/api/admin/osd…).
+api.MapOsdApi(mgmt, access, osd, hub, dashboards, cfg);
 
 // Lets an HTTPS dashboard reach the other PCs through this one, so a phone only has to trust this PC's certificate.
 app.MapPeerRelay(discovery, deviceList);

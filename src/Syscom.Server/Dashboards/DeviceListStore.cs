@@ -75,7 +75,9 @@ public sealed class DeviceListStore
             var url = Str("url", 300);
             if (url is not null && !(Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == "http" || u.Scheme == "https")))
                 return (null, "A device url must be an http(s) address.");
-            int? httpsPort = d.TryGetProperty("httpsPort", out var hp) && hp.TryGetInt32(out var port) && port is > 0 and < 65536 ? port : null;
+            // A PC without HTTPS sends null here (TryGetInt32 throws on anything but a number).
+            int? httpsPort = d.TryGetProperty("httpsPort", out var hp) && hp.ValueKind == JsonValueKind.Number
+                && hp.TryGetInt32(out var port) && port is > 0 and < 65536 ? port : null;
             var id = Str("id", 64);
             if (id is null && url is null) return (null, "Each device needs an id or a url.");
             clean.Add(new { id, name = Str("name", 80), url, httpsPort });

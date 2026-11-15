@@ -68,6 +68,35 @@ public sealed class AdminClient : IDisposable
         return await resp.Content.ReadFromJsonAsync<ServerSettings>(SyscomPaths.Json, cts.Token);
     }
 
+    /// <summary>The on-screen display: shown or not, its settings, and (with values, while shown) what to draw.</summary>
+    public async Task<OsdFrame?> OsdAsync(bool values, CancellationToken ct)
+    {
+        EnsureKey();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        return await _http.GetFromJsonAsync<OsdFrame>($"admin/osd?values={(values ? "true" : "false")}", SyscomPaths.Json, cts.Token);
+    }
+
+    /// <summary>Shows (true), hides (false) or toggles (null) the on-screen display; answers whether it shows now.</summary>
+    public async Task<bool> SetOsdShownAsync(bool? shown)
+    {
+        EnsureKey();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var resp = await _http.PostAsJsonAsync("admin/osd/shown", new OsdShownRequest(shown), SyscomPaths.Json, cts.Token);
+        resp.EnsureSuccessStatusCode();
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
+        return doc.RootElement.TryGetProperty("shown", out var s) && s.ValueKind == JsonValueKind.True;
+    }
+
+    /// <summary>Tells the server whether the shortcut works, and which screens and fonts this PC has.</summary>
+    public async Task ReportOsdAsync(OsdTrayReport report)
+    {
+        EnsureKey();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var resp = await _http.PostAsJsonAsync("admin/osd/tray", report, SyscomPaths.Json, cts.Token);
+        resp.EnsureSuccessStatusCode();
+    }
+
     /// <summary>Downloads and installs updates (the .NET runtime alone is tens of MB, so this may take minutes).</summary>
     public Task<UpdateOutcome> UpdateAsync(IEnumerable<string> ids) =>
         PostOutcome("admin/components/update", new { ids = ids.ToArray() }, TimeSpan.FromMinutes(20));

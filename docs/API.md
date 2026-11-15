@@ -46,6 +46,9 @@ Readings are at most about a second old. When no dashboard is open, the first ca
 | PUT | [`/api/dashboard`](#replace-the-dashboard) | full-access key | Replace the dashboard |
 | GET | [`/api/dashboard/background`](#the-background-picture) | read key | The background picture |
 | PUT | [`/api/dashboard/background`](#set-the-background-picture) | full-access key | Set the background picture |
+| GET | [`/api/osd`](#the-osd-with-what-each-reading-shows-now) | read key | The OSD, with what each reading shows now |
+| POST | [`/api/osd/toggle`](#show-or-hide-the-osd) | full-access key | Show or hide the OSD |
+| GET | [`/api/osd/fonts`](#the-fonts-the-osd-can-use) | read key | The fonts the OSD can use |
 | GET | [`/api/devices`](#the-pcs-this-dashboard-shows) | read key | The PCs this dashboard shows |
 | PUT | [`/api/devices`](#change-the-pcs-this-dashboard-shows) | full-access key | Change the PCs this dashboard shows |
 | GET | [`/api/peers`](#syscom-pcs-heard-on-the-network) | read key | SYSCOM PCs heard on the network |
@@ -559,7 +562,7 @@ Answer:
 
 `GET /api/dashboard` · read key
 
-`{ rev, widgets (desktop layout), phone (null = same as desktop), look, saved, current }`; `rev` 0 = nothing saved yet. Each card is `{ id, sensor, type, w, h, label, min, max, thresholds, … }`, each section `{ id, kind: "section", title }`.
+`{ rev, widgets (desktop layout), phone (null = same as desktop), osd (the OSD's readings), look, osdLook (the OSD's settings), saved, current }`; `rev` 0 = nothing saved yet. Each card is `{ id, sensor, type, w, h, label, min, max, thresholds, … }`, each section `{ id, kind: "section", title }`, each OSD reading `{ id, sensor, label, pos, stack, unit, decimals, thresholds, color, size, hideUnit }`.
 
 ```bash
 curl -H "X-API-Key: YOUR_API_KEY" "http://192.168.1.20:47810/api/dashboard"
@@ -600,11 +603,20 @@ Answer:
     "…"
   ],
   "phone": null,
+  "osd": [
+    "…"
+  ],
   "look": {
     "bg": "none",
     "alpha": 100,
     "round": 100,
     "anim": "smooth"
+  },
+  "osdLook": {
+    "font": "Segoe UI",
+    "size": 18,
+    "hotkey": "Ctrl+Shift+S",
+    "…": "…"
   },
   "saved": [],
   "current": {}
@@ -615,7 +627,7 @@ Answer:
 
 `PUT /api/dashboard` · full-access key
 
-Body: `{ widgets, phone, look, saved, current }` as `GET /api/dashboard` returns them (max 2 MB). Answers `{ rev }`; open dashboards reload it at once. Read it first and send it back changed, so nothing else is lost.
+Body: `{ widgets, phone, osd, look, osdLook, saved, current }` as `GET /api/dashboard` returns them (max 2 MB); leave out `osd` and `osdLook` to keep the OSD as it is. Answers `{ rev }`; open dashboards reload it at once. Read it first and send it back changed, so nothing else is lost.
 
 ```bash
 curl -H "X-API-Key: YOUR_API_KEY" "http://192.168.1.20:47810/api/dashboard" -o dashboard.json
@@ -744,6 +756,207 @@ Answer:
 ```json
 {
   "id": "5d41402abc4b2a76"
+}
+```
+
+## On-screen display
+
+The OSD: readings the SYSCOM tray app draws over everything on the PC's own screen, games included (not over games in exclusive full screen). Lay it out in the dashboard's OSD view; its readings and settings are `osd` and `osdLook` in the dashboard (`GET /api/dashboard`).
+
+### The OSD, with what each reading shows now
+
+`GET /api/osd` · read key
+
+Whether it shows, its shortcut, what the tray app reports (running, whether the shortcut works, the screens), its settings and each reading: where it goes (`pos`: `tl`, `tc`, `tr`, `ml`, `mr`, `bl`, `bc`, `br`; `stack`: `below` the reading before it in that place, or `beside` it), its label, value and text as the OSD shows them.
+
+| Parameter | |
+| --- | --- |
+| `readings` | `false` leaves the readings out (`elements` is `null`) |
+
+```bash
+curl -H "X-API-Key: YOUR_API_KEY" "http://192.168.1.20:47810/api/osd"
+```
+
+<details><summary>PowerShell, Python, JavaScript</summary>
+
+```powershell
+$data = Invoke-RestMethod -Uri "http://192.168.1.20:47810/api/osd" -Headers @{ "X-API-Key" = "YOUR_API_KEY" }
+"OSD shown: {0}" -f $data.shown
+$data.elements | Format-Table pos, label, text
+```
+
+```python
+import json, urllib.request
+req = urllib.request.Request("http://192.168.1.20:47810/api/osd", headers={"X-API-Key": "YOUR_API_KEY"})
+with urllib.request.urlopen(req) as r:
+    data = json.load(r)
+print("shown" if data["shown"] else "hidden")
+for e in data["elements"]:
+    print(e["pos"], e["label"], e["text"])
+```
+
+```javascript
+const r = await fetch("http://192.168.1.20:47810/api/osd", { headers: { "X-API-Key": "YOUR_API_KEY" } });
+const data = await r.json();
+console.log(data.shown ? "shown" : "hidden");
+for (const e of data.elements) console.log(e.pos, e.label, e.text);
+```
+
+</details>
+
+In a browser: `http://192.168.1.20:47810/api/osd?key=YOUR_API_KEY`
+
+Answer:
+
+```json
+{
+  "pc": "GAMING-PC",
+  "shown": true,
+  "hotkey": "Ctrl+Shift+S",
+  "tray": {
+    "running": true,
+    "hotkeyRegistered": true,
+    "hotkeyError": null,
+    "screens": [
+      {
+        "id": "\\\\.\\DISPLAY1",
+        "name": "Screen 1",
+        "width": 2560,
+        "height": 1440,
+        "scale": 1.25,
+        "primary": true
+      }
+    ]
+  },
+  "look": {
+    "font": "Segoe UI",
+    "bold": true,
+    "size": 18,
+    "color": "#ffffff",
+    "labelColor": "#9cc3ff",
+    "transparency": 0,
+    "backdrop": 40,
+    "backdropColor": "#000000",
+    "outline": "outline",
+    "margin": 16,
+    "screen": null,
+    "hotkey": "Ctrl+Shift+S",
+    "interval": 1000
+  },
+  "t": 1793430459731,
+  "elements": [
+    {
+      "id": "k3f9x2",
+      "pos": "tl",
+      "stack": "below",
+      "label": "CPU",
+      "sensor": {
+        "id": "/amdcpu/0/temperature/2",
+        "name": "Core (Tctl/Tdie)",
+        "hardware": "AMD Ryzen 7 7800X3D",
+        "unit": "°C",
+        "available": true
+      },
+      "value": 61.5,
+      "unit": "°C",
+      "number": "62",
+      "text": "62 °C",
+      "color": null,
+      "level": null
+    }
+  ]
+}
+```
+
+### Show or hide the OSD
+
+`POST /api/osd/toggle` · full-access key
+
+`/api/osd/show` shows it, `/api/osd/hide` hides it, `/api/osd/toggle` switches it, like its shortcut. No body; answers `{ shown }`. It stays that way after a restart. The tray app on the PC draws it while it runs.
+
+```bash
+curl -X POST -H "X-API-Key: YOUR_API_KEY" "http://192.168.1.20:47810/api/osd/toggle"
+curl -X POST -H "X-API-Key: YOUR_API_KEY" "http://192.168.1.20:47810/api/osd/show"   # or /hide
+```
+
+<details><summary>PowerShell, Python, JavaScript</summary>
+
+```powershell
+$data = Invoke-RestMethod -Method Post -Uri "http://192.168.1.20:47810/api/osd/toggle" -Headers @{ "X-API-Key" = "YOUR_API_KEY" }
+"OSD shown: {0}" -f $data.shown
+```
+
+```python
+import json, urllib.request
+
+req = urllib.request.Request("http://192.168.1.20:47810/api/osd/toggle", method="POST", headers={"X-API-Key": "YOUR_API_KEY"})
+with urllib.request.urlopen(req) as r:
+    data = json.load(r)
+print("shown" if data["shown"] else "hidden")
+```
+
+```javascript
+const r = await fetch("http://192.168.1.20:47810/api/osd/toggle", { method: "POST", headers: { "X-API-Key": "YOUR_API_KEY" } });
+const data = await r.json();
+console.log(data.shown ? "shown" : "hidden");
+```
+
+</details>
+
+Answer:
+
+```json
+{
+  "shown": true
+}
+```
+
+### The fonts the OSD can use
+
+`GET /api/osd/fonts` · read key
+
+The fonts installed on the PC, as its tray app reports them (`[]` until it has); `osdLook.font` takes one of these names.
+
+```bash
+curl -H "X-API-Key: YOUR_API_KEY" "http://192.168.1.20:47810/api/osd/fonts"
+```
+
+<details><summary>PowerShell, Python, JavaScript</summary>
+
+```powershell
+$data = Invoke-RestMethod -Uri "http://192.168.1.20:47810/api/osd/fonts" -Headers @{ "X-API-Key" = "YOUR_API_KEY" }
+"{0} fonts" -f $data.fonts.Count
+```
+
+```python
+import json, urllib.request
+req = urllib.request.Request("http://192.168.1.20:47810/api/osd/fonts", headers={"X-API-Key": "YOUR_API_KEY"})
+with urllib.request.urlopen(req) as r:
+    data = json.load(r)
+print(len(data["fonts"]), "fonts")
+```
+
+```javascript
+const r = await fetch("http://192.168.1.20:47810/api/osd/fonts", { headers: { "X-API-Key": "YOUR_API_KEY" } });
+const data = await r.json();
+console.log(data.fonts.length, "fonts");
+```
+
+</details>
+
+In a browser: `http://192.168.1.20:47810/api/osd/fonts?key=YOUR_API_KEY`
+
+Answer:
+
+```json
+{
+  "fonts": [
+    "Arial",
+    "Bahnschrift",
+    "Consolas",
+    "Segoe UI",
+    "…"
+  ]
 }
 ```
 
@@ -966,6 +1179,8 @@ Answer:
 For live readings, open a WebSocket to `/ws?key=…` (the key in the address: browsers can't send headers on WebSockets) and say which sensors you want and how often (ms, 500 to 60000). The PC first sends its sensor list (`catalog`), confirms your subscription (`subscribed`, with the order of the values), then sends a `data` frame every interval: `{ "type": "data", "t": …, "v": [ … ] }`, values in that order.
 
 Several rates on one connection: `{ "type": "subscribe", "streams": [ { "id": 1, "interval": 500, "sensors": [ … ] }, { "id": 2, "interval": 5000, "sensors": [ … ] } ] }`; each `data` frame then names its stream in `"s"`. Omit `sensors` for every sensor. A bad key closes the socket with code 4401.
+
+The PC also tells when its on-screen display was shown or hidden (by its shortcut, the tray menu or the API): `{ "type": "osd", "rev": …, "shown": true }`, once on connect and after each change.
 
 ```javascript
 const ws = new WebSocket("ws://192.168.1.20:47810/ws?key=YOUR_API_KEY");
