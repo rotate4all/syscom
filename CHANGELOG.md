@@ -35,8 +35,9 @@ as a GitHub release, and installed PCs update to it from there.
   - Saved layouts, export and import, undo and redo work for the OSD too (an OSD keeps its settings with it).
   - The tray app draws it (the service can't draw on your screen): one small window per place, always on top, that
     clicks and keys go through and that never takes the focus, so a game isn't interrupted. Nothing is injected into
-    games. Games in **exclusive full screen** don't show it; borderless or windowed full screen (most games today)
-    do. The SYSCOM tray app must be running, as it is after sign-in. Hidden, it costs nothing: the sensors are only
+    games. It shows over windowed, borderless and most full screen games (DirectX 12 has no exclusive mode, and
+    Windows' fullscreen optimizations usually cover DirectX 11); only games in true **exclusive full screen**, mostly
+    older ones, hide it. The SYSCOM tray app must be running, as it is after sign-in. Hidden, it costs nothing: the sensors are only
     read for it while it shows.
 
 ### Fixed

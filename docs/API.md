@@ -761,7 +761,7 @@ Answer:
 
 ## On-screen display
 
-The OSD: readings the SYSCOM tray app draws over everything on the PC's own screen, games included (not over games in exclusive full screen). Lay it out in the dashboard's OSD view; its readings and settings are `osd` and `osdLook` in the dashboard (`GET /api/dashboard`).
+The OSD: readings the SYSCOM tray app draws over everything on the PC's own screen, games included (windowed, borderless and most full screen games; not games in true exclusive full screen, mostly older ones). Lay it out in the dashboard's OSD view; its readings and settings are `osd` and `osdLook` in the dashboard (`GET /api/dashboard`).
 
 ### The OSD, with what each reading shows now
 

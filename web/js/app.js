@@ -936,7 +936,7 @@ function renderOsdPage(dev, p, conn) {
     </div>
     <p class="hint osd-note"></p>`;
   $('.osd-note', box).textContent = `The SYSCOM tray app draws these over everything on ${dev.name}'s screen, games included, while it runs there. `
-    + 'Games in exclusive full screen hide it: set them to borderless (or windowed) full screen. '
+    + 'It shows over windowed, borderless and most full screen games; only games in true exclusive full screen (mostly older ones) hide it, so set those to borderless. '
     + 'Click a reading to change it; drag it onto another one to put it beside that one, under a line to start a new line, or to another place on the screen.';
   p.board.append(box);
   p.osd = { box, screen: $('.osd-screen', box), els: new Map(), look: dev.osdLook };

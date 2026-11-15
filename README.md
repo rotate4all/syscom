@@ -145,9 +145,13 @@ view**), and lay it out on a picture of that PC's screen. Changes show up on the
 
 The SYSCOM tray app draws the OSD, so it shows while the tray app runs (it starts when you sign in). It's a set of
 small windows that stay on top, let every click and key through and never take the focus; nothing is injected into
-games, so it's safe with anti-cheat. Games in **exclusive full screen** own the screen and hide it: choose
-*borderless* or *windowed* full screen in the game's settings (most games today use that anyway). While it's hidden
-it costs nothing; while it shows, the PC reads the sensors at the OSD's refresh rate, as for an open dashboard.
+games, so it's safe with anti-cheat. It shows over windowed and borderless games and over most games set to full
+screen: DirectX 12 has no exclusive mode, and Windows usually runs the "exclusive" mode of DirectX 11 games through
+its fullscreen optimizations, which let it show. Only games in true **exclusive full screen** hide it, mostly older
+games or ones with *Disable fullscreen optimizations* ticked in the game's Properties > Compatibility; untick that or
+choose *borderless* full screen in the game's settings. Drawing over those would mean injecting into the game, which
+SYSCOM doesn't do. While it's hidden it costs nothing; while it shows, the PC reads the sensors at the OSD's refresh
+rate, as for an open dashboard.
 
 ## API
 

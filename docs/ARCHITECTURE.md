@@ -154,8 +154,10 @@ window (`UpdateLayeredWindow`, per-pixel alpha): topmost, click-through (`WS_EX_
 (`WS_EX_NOACTIVATE`, `MA_NOACTIVATE`), not in the taskbar or Alt+Tab. It re-asserts topmost with every frame, scales
 with the screen's DPI, and keeps each number column as wide as it has been, so groups don't jitter. The shortcut is
 a `RegisterHotKey` on a message-only window (tried again every 30 s when another app holds it). It reports the
-shortcut's state, the screens and the installed fonts to the service, for the dashboard. Games in exclusive full
-screen can't be drawn over without hooking into them, which SYSCOM doesn't do.
+shortcut's state, the screens and the installed fonts to the service, for the dashboard. Windowed, borderless and
+flip-model full screen games (all of DirectX 12, and DirectX 11 under Windows' fullscreen optimizations) are
+composed by DWM, so the windows show over them. Games in true exclusive full screen bypass DWM and can't be drawn
+over without hooking into them, which SYSCOM doesn't do.
 
 At sign-in it often starts before Explorer has made the taskbar. Its icon then comes back when Explorer announces
 the taskbar ("TaskbarCreated", which an elevated app must let through: `Taskbar.cs`), and if that message never
