@@ -359,6 +359,8 @@ body.editing .add-tile { display: grid; }
 .page-msg { margin: 8px 0 14px; }
 .notice { padding: 14px 16px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); color: var(--muted); }
 .notice strong { color: var(--text); }
+.notice p { margin: 6px 0 0; }
+.notice .inline { margin-top: 10px; }
 .empty { text-align: center; padding: 40px 16px; color: var(--muted); }
 .empty .inline { justify-content: center; margin-top: 14px; }
 .login { display: grid; gap: 10px; max-width: 340px; margin: 40px auto; padding: 20px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }

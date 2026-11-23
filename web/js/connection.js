@@ -3,6 +3,17 @@ import { effectiveMaxFrom, intervalOf } from './widgets.js';
 
 const CLOSE_UNAUTHORIZED = 4401;
 const DAY = 86_400_000;
+const OPEN_TIMEOUT = 10_000;   // a connection that isn't open by then is given up and tried again
+const TICK = 1000;             // how often a connection checks that its PC is still sending
+
+/**
+ * How long a connection may stay silent before its PC counts as gone. Every PC sends the dashboard's stream at the
+ * dashboard's interval (an empty frame if no card uses it), so silence means the PC is gone even though the
+ * connection still looks open: a PC that's switched off (Windows' fast startup shuts down without closing
+ * connections), crashed or lost its network never says goodbye, and the dashboard never sends anything that would
+ * find out. Browsers notice that only after many minutes.
+ */
+const silentLimit = (interval) => Math.max(5000, 3 * interval + 1000);
 
 /** A PC's /api/info at a base address (direct, or through a relay). */
 export async function probe(base, timeoutMs = 6000) {
@@ -54,6 +65,10 @@ export class Connection extends EventTarget {
     this.home = false;         // the PC that served this page
     this.route = null;         // 'direct' | 'relay' | null (not decided yet)
     this.relayTarget = null;   // how the relay names this PC (see relayTargets); null = the first way
+    this.lastRoute = null;     // the route of the last connection that opened (kept while offline, for the page)
+    this.heardAt = 0;          // performance.now() of the last message (or of the open)
+    this.dataAt = 0;           // Date.now() of the last readings, for "no readings since …"
+    this.watchdog = 0;
   }
 
   /**
@@ -104,6 +119,28 @@ export class Connection extends EventTarget {
     if (this.home) return;
     this.route = null;
     this.relayTarget = null;
+  }
+
+  /**
+   * While this PC is reached through the relay, checks whether this browser can reach it by itself now (its
+   * certificate was trusted meanwhile, or it's back on this network) and if so moves the connection there, so the PC
+   * doesn't depend on the one that served the page. Called now and then, and when the page is looked at again.
+   */
+  async tryDirect() {
+    if (this.route !== 'relay' || this.status !== 'online' || !this.direct || this.checkingDirect) return false;
+    this.checkingDirect = true;
+    try {
+      await probe(this.direct, 4000);
+    } catch {
+      return false;   // still untrusted or unreachable: stay on the relay
+    } finally {
+      this.checkingDirect = false;
+    }
+    if (this.route !== 'relay' || this.status !== 'online') return false;
+    this.route = 'direct';
+    this.relayTarget = null;
+    this.connect();
+    return true;
   }
 
   info() { return probe(this.base); }
@@ -231,9 +268,10 @@ export class Connection extends EventTarget {
   history(sensor, days) { return this.api(`/api/history?sensor=${encodeURIComponent(sensor)}&days=${days}`); }
 
   async connect() {
-    this.stop();
+    this.halt();
     if (!this.device.token) { this.setStatus('auth'); return; }
-    this.setStatus('connecting');
+    // A PC that was lost stays "offline" (its notice stays up) until it's back, through every retry.
+    if (this.status !== 'offline') this.setStatus('connecting');
     const attempt = ++this.attempt;
     await this.resolveRoute();
     if (attempt !== this.attempt) return;   // stopped or restarted meanwhile
@@ -241,36 +279,86 @@ export class Connection extends EventTarget {
     const url = this.base.replace(/^http/, 'ws') + '/ws?token=' + encodeURIComponent(this.device.token);
     const ws = new WebSocket(url);
     this.ws = ws;
+    this.heardAt = performance.now();
+    this.startWatchdog(ws);
 
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       this.retry = 0;
+      this.heardAt = performance.now();
+      this.lastRoute = this.route || (this.base === this.direct ? 'direct' : 'relay');
       this.setStatus('online');
       this.subscribe();
       this.renewToken();
     };
-    ws.onmessage = (e) => this.onMessage(e.data);
+    ws.onmessage = (e) => {
+      if (this.ws !== ws) return;
+      this.heardAt = performance.now();
+      this.onMessage(e.data);
+    };
     ws.onclose = (e) => {
       if (this.ws !== ws) return; // superseded or stopped on purpose
-      this.ws = null;
       if (e.code === CLOSE_UNAUTHORIZED) {
+        this.halt();
         this.device.token = null;
         this.emit('token');
         this.setStatus('auth');
         return;
       }
-      this.setStatus('offline');
-      this.forgetRoute();
-      const delay = Math.min(30000, 1000 * 2 ** this.retry++);
-      this.timer = setTimeout(() => this.connect(), delay);
+      this.lost();
     };
   }
 
-  stop() {
+  /**
+   * Checks every second that the PC still sends: not open within OPEN_TIMEOUT, or silent for longer than
+   * silentLimit, means it's gone, and the connection is dropped and tried again (see silentLimit). A tick that comes
+   * late means this page wasn't running (the phone slept, the browser froze the tab): the silence is measured from
+   * then, since nothing could have arrived meanwhile.
+   */
+  startWatchdog(ws) {
+    clearInterval(this.watchdog);
+    let tickAt = performance.now();
+    this.watchdog = setInterval(() => {
+      if (this.ws !== ws) { clearInterval(this.watchdog); return; }
+      const now = performance.now();
+      if (now - tickAt > 3 * TICK) this.heardAt = Math.max(this.heardAt, now);
+      tickAt = now;
+      const limit = ws.readyState === WebSocket.OPEN ? silentLimit(this.device.interval) : OPEN_TIMEOUT;
+      if (now - this.heardAt > limit) this.lost();
+    }, TICK);
+  }
+
+  /** The PC is gone (connection closed, or silent): show it as offline and try again, with growing pauses. */
+  lost() {
+    this.halt();
+    this.setStatus('offline');
+    this.forgetRoute();
+    const delay = Math.min(30000, 1000 * 2 ** this.retry++);
+    this.timer = setTimeout(() => this.connect(), delay);
+  }
+
+  /** Tries again now instead of waiting for the next retry (the page was looked at again, or the relay is back). */
+  retryNow() {
+    if (this.status !== 'offline' && this.status !== 'idle') return;
+    this.retry = 0;
+    this.connect();
+  }
+
+  /** Closes the connection and cancels retries, without changing the status. */
+  halt() {
     this.attempt = (this.attempt || 0) + 1;
     clearTimeout(this.timer);
+    clearInterval(this.watchdog);
     const ws = this.ws;
     this.ws = null;
-    if (ws) ws.close();
+    if (ws) {
+      ws.onopen = ws.onmessage = ws.onclose = null;
+      try { ws.close(); } catch { /* already closing */ }
+    }
+  }
+
+  stop() {
+    this.halt();
     if (this.status !== 'auth') this.setStatus('idle');
   }
 
@@ -333,6 +421,7 @@ export class Connection extends EventTarget {
         const index = m.s == null ? this.index : this.streams.get(m.s);
         if (!index) break;
         const frame = { t: m.t, v: m.v, s: m.s ?? null, index };
+        this.dataAt = Date.now();
         for (const [id, i] of index) this.values.set(id, m.v[i]);
         this.last = { t: m.t, v: null, s: null, index: null };
         this.emit('data', frame);

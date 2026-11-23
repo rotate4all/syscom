@@ -1,6 +1,6 @@
 // Service worker: makes the dashboard installable and lets it open (from cache) while the PC is unreachable.
 // Network first, so a dashboard update on the server shows up on the next load.
-const CACHE = 'syscom-shell-v6';
+const CACHE = 'syscom-shell-v7';
 const SHELL = ['./', 'index.html', 'app.css', 'js/app.js', 'js/connection.js', 'js/store.js', 'js/widgets.js', 'js/dnd.js', 'js/history.js', 'js/transfer.js', 'js/apiview.js', 'js/api-reference.js', 'js/osd.js',
   'manifest.webmanifest', 'icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 

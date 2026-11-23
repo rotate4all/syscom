@@ -56,7 +56,13 @@ function connectionFor(dev) {
   let c = conns.get(dev.key);
   if (c) return c;
   c = new Connection(dev);
-  c.addEventListener('status', () => { renderMessage(dev); updateHeader(); });
+  c.addEventListener('status', () => {
+    // The other PCs' notices say whether the PC that relays them answers; when it's back, they try again right away.
+    renderMessage(dev);
+    if (c.home) state.devices.forEach((d) => { if (d !== dev && conns.get(d.key)?.status === 'offline') renderMessage(d); });
+    updateHeader();
+    if (c.home && c.status === 'online') conns.forEach((o) => { if (o !== c) o.retryNow(); });
+  });
   c.addEventListener('token', persist);
   c.addEventListener('catalog', () => { if (!refreshPage(dev)) renderPage(dev); c.subscribe(); });
   c.addEventListener('data', (e) => onData(dev, e.detail));
@@ -710,7 +716,7 @@ function renderMessage(dev) {
   p.board.hidden = false;
 
   if (conn?.status === 'offline') {
-    p.msg.innerHTML = `<div class="notice"><strong>Can't reach ${escapeHtml(dev.name)}.</strong> Retrying… <span class="sub">${escapeHtml(dev.url)}</span></div>`;
+    p.msg.innerHTML = offlineNotice(dev, conn);
   } else if (!dev.widgets.length && conn?.status === 'online' && layoutMode() !== 'osd') {
     const box = document.createElement('div');
     box.className = 'empty';
@@ -722,6 +728,49 @@ function renderMessage(dev) {
     $('[data-a="add"]', box).onclick = () => openWidgetEditor(dev, null);
     p.msg.append(box);
   }
+}
+
+/**
+ * How this browser reaches a PC: { relayed, via (the PC that relays it), trust (that PC's certificate setup page) }.
+ * A PC is relayed when the dashboard is opened over HTTPS and this browser doesn't trust that PC's own certificate
+ * (or can't reach it); it then depends on the PC that served the page. Trusting its certificate makes it direct.
+ */
+function routeOf(dev, conn) {
+  const home = state.devices.find((d) => d.serverId && d.serverId === homeId);
+  const route = conn?.status === 'online' ? conn.route : conn?.lastRoute;
+  const relayed = !!conn && !conn.home && route === 'relay' && !!home && home !== dev;
+  return { relayed, via: relayed ? home : null, trust: new URL('/trust', dev.url).href };
+}
+
+/** The page's notice for a PC that doesn't answer: since when, why (if another PC relays it), and what helps. */
+function offlineNotice(dev, conn) {
+  const name = escapeHtml(dev.name);
+  const since = conn.dataAt ? ` No readings since ${new Date(conn.dataAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}.` : '';
+  const { relayed, via, trust } = routeOf(dev, conn);
+  let why = `Check that it's switched on and SYSCOM is running there. <span class="sub">${escapeHtml(dev.url)}</span>`;
+  if (relayed && conns.get(via.key)?.status === 'online') {
+    why = `${escapeHtml(via.name)} passes ${name}'s readings on to this device, and it can't reach ${name} either. Check that ${name} is switched on and SYSCOM is running there.`;
+  } else if (relayed) {
+    why = `This device reaches ${name} through ${escapeHtml(via.name)}, the PC this dashboard was opened from, and that one isn't answering either.
+      Trust ${name}'s certificate on this device once and it connects to ${name} directly, without ${escapeHtml(via.name)}.
+      <div class="inline"><a class="ghost button" href="${escapeHtml(trust)}" target="_blank" rel="noopener">Set up this device for ${name}</a></div>`;
+  } else if (location.protocol === 'https:' && !conn.home && conn.lastRoute !== 'direct' && new URL(dev.url).hostname !== location.hostname) {
+    // Not reached yet this time (the PC that served the page may be off too): it may be a certificate this device
+    // doesn't trust.
+    why += `<br>If this device doesn't trust ${name}'s certificate, it reaches ${name} only through the PC this dashboard was opened from.
+      <div class="inline"><a class="ghost button" href="${escapeHtml(trust)}" target="_blank" rel="noopener">Set up this device for ${name}</a></div>`;
+  }
+  return `<div class="notice"><strong>Can't reach ${name}.</strong>${since} Retrying… <p>${why}</p></div>`;
+}
+
+/** The header dot's tooltip: the connection's state, and for a PC another PC relays, which one. */
+function statusText(dev, conn) {
+  const st = conn?.status || 'idle';
+  if (st === 'online') {
+    const { relayed, via } = routeOf(dev, conn);
+    return relayed ? `Connected through ${via.name}` : 'Connected';
+  }
+  return { connecting: 'Connecting…', offline: "Can't reach it, retrying", auth: 'Signed out', idle: 'Not connected' }[st] || st;
 }
 
 function renderDots() {
@@ -740,9 +789,10 @@ function renderDots() {
 function updateHeader() {
   const dev = state.devices[active];
   $('#device-name').textContent = dev ? dev.name : 'SYSCOM';
-  const status = dev ? conns.get(dev.key)?.status || 'idle' : 'idle';
+  const conn = dev && conns.get(dev.key);
+  const status = conn?.status || 'idle';
   $('#status').className = 'dot ' + status;
-  $('#status').title = status;
+  $('#status').title = dev ? statusText(dev, conn) : status;
   // The saved layout on screen, if any (marked when changed since it was loaded).
   const which = layoutMode();
   const saved = dev && dev.saved.find((x) => x.id === dev.current[which]);
@@ -803,7 +853,8 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   state.devices.forEach((d) => {
     const c = connectionFor(d);
-    if (c.status === 'offline' || c.status === 'idle') { c.retry = 0; c.connect(); }
+    c.retryNow();
+    c.tryDirect();   // back from trusting a PC's certificate, perhaps
   });
   const dev = state.devices[active];
   if (dev) pages.get(dev.key)?.widgets.forEach((w) => w.refresh());
@@ -2084,7 +2135,7 @@ function renderSettings() {
     const li = document.createElement('li');
     li.innerHTML = `
       <span class="dot ${conn?.status || 'idle'}"></span>
-      <span class="grow"><input class="name" value="${escapeHtml(dev.name)}" aria-label="Device name"><span class="sub">${escapeHtml(conn?.base || dev.url)}${conn?.secure ? ' · secure' : ''}</span></span>
+      <span class="grow"><input class="name" value="${escapeHtml(dev.name)}" aria-label="Device name"><span class="sub">${routeLine(dev, conn)}</span></span>
       <label class="interval">Every <select aria-label="How often ${escapeHtml(dev.name)} sends readings">${intervalOptions(dev.interval)}</select></label>
       <button data-a="up" title="Move up">↑</button>
       ${dev.token ? '<button data-a="logout">Sign out</button>' : ''}
@@ -2109,6 +2160,16 @@ function renderSettings() {
   });
   renderPeers();
   renderAppInstall();
+}
+
+/** A PC's address in the settings list, and for one another PC relays, which one (with the way to connect directly). */
+function routeLine(dev, conn) {
+  const { relayed, via, trust } = routeOf(dev, conn);
+  if (relayed) {
+    const tip = `This device doesn't trust ${dev.name}'s certificate, so ${via.name} passes its readings on, and ${dev.name} stops updating when ${via.name} is off. Trust ${dev.name}'s certificate once to connect directly.`;
+    return `Through ${escapeHtml(via.name)} · <a href="${escapeHtml(trust)}" target="_blank" rel="noopener" title="${escapeHtml(tip)}">Connect directly</a>`;
+  }
+  return `${escapeHtml(conn?.base || dev.url)}${conn?.secure ? ' · secure' : ''}`;
 }
 
 /** Polling choices: 0.5 s … 10 s (1 s is the default); an interval set some other way stays listed. */
@@ -2715,6 +2776,8 @@ function reloadWhenIdle() {
 setInterval(checkWebVersion, 15 * 60_000);
 // A dashboard left open for weeks stays signed in: each connection renews its sign-in once a day (see Connection).
 setInterval(() => conns.forEach((c) => { if (c.status === 'online') c.renewToken(); }), 60 * 60_000);
+// A PC reached through the relay moves to a direct connection once this browser can reach it by itself.
+setInterval(() => conns.forEach((c) => c.tryDirect()), 60_000);
 
 // ---------- start
 // Installable app: service workers only run on HTTPS or localhost; over plain LAN HTTP the page still works.

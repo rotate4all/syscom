@@ -174,7 +174,10 @@ public static class PeerRelay
     {
         using var upstream = new ClientWebSocket();
         upstream.Options.Proxy = null;
-        upstream.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+        // Pings the target PC and gives up when it stops answering: a PC that's switched off, crashed or lost its
+        // network doesn't close its connections, and without an answer to wait for this one would stay open.
+        upstream.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
+        upstream.Options.KeepAliveTimeout = TimeSpan.FromSeconds(10);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
@@ -193,7 +196,18 @@ public static class PeerRelay
         using var onStop = stopping.Register(() => stopped.TrySetResult());   // this PC restarting must not wait for it
         var up = Pump(client, upstream, cts.Token);
         var down = Pump(upstream, client, cts.Token);
-        await Task.WhenAny(up, down, stopped.Task);
+        var first = await Task.WhenAny(up, down, stopped.Task);
+        // This PC stopping, or a side that broke off without closing (the target stopped answering pings): the
+        // other side is told the PC went away (1001), and the dashboard tries again. When the target broke off, the
+        // dashboard is told before the receive below is cancelled, which would drop it without a word.
+        // (A side that stops answering pings is aborted, and its pending receive ends as cancelled.)
+        var gone = first == stopped.Task || !first.IsCompletedSuccessfully;
+        if (first == down && !down.IsCompletedSuccessfully && client.State == WebSocketState.Open)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            try { await client.CloseOutputAsync(WebSocketCloseStatus.EndpointUnavailable, "That PC stopped answering", timeout.Token); }
+            catch (Exception) { }
+        }
         cts.Cancel();
         try { await Task.WhenAll(up, down); } catch (Exception) { /* one side went away */ }
         foreach (var ws in new WebSocket[] { client, upstream })
@@ -201,7 +215,7 @@ public static class PeerRelay
             if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                try { await ws.CloseOutputAsync(stopping.IsCancellationRequested ? WebSocketCloseStatus.EndpointUnavailable : WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
+                try { await ws.CloseOutputAsync(gone ? WebSocketCloseStatus.EndpointUnavailable : WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
                 catch (Exception) { }
             }
         }

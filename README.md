@@ -321,7 +321,8 @@ SYSCOM PC creates its own small certificate authority, and your phone trusts it 
 The certificate is name-constrained to private network addresses, `localhost`, `*.local` and the PC's own name, so
 it can't vouch for any other website. The PC renews its HTTPS certificate by itself when its address changes, and the
 phone doesn't need to do anything again. Monitoring several PCs from the app: trust each PC once from its own setup
-page. The secure dashboard then talks to every PC over HTTPS.
+page. The secure dashboard then talks to every PC directly over HTTPS, each on its own connection, so each one keeps
+updating whichever other PC is switched off.
 
 Without the certificate, *Add to Home Screen* still works over plain HTTP: iPhone opens it full screen, Android
 creates a shortcut that opens in Chrome.
@@ -329,7 +330,12 @@ creates a shortcut that opens in Chrome.
 Each PC keeps its own dashboard, so a layout you prepare on your PC is what the phone shows. The list of PCs is kept
 on the PC the dashboard was opened from, so every address of that PC (and every browser) finds the same PCs. From
 the secure dashboard, adding another PC needs no second certificate: if the phone doesn't trust that PC, the first
-PC relays to it on the LAN.
+PC relays to it on the LAN. Such a PC then depends on the first one: Settings → Devices shows it as **Through
+&lt;PC&gt;**, and while the first PC is off it can't be reached. **Connect directly** there opens its setup page;
+once the phone trusts its certificate, the dashboard switches to a direct connection by itself.
+
+A PC that stops answering (switched off, asleep, off the network) is shown as **Can't reach …** within about 5
+seconds, with the time of its last reading, and the dashboard reconnects by itself when it's back.
 
 ## Updating
 
