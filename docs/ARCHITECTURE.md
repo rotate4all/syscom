@@ -76,7 +76,7 @@ Plain ES modules, no framework and no build step. About 40 KB uncompressed.
 | File | Role |
 | --- | --- |
 | `js/app.js` | Pages (one per PC) with sections, swipe tracking, edit mode, phone preview, layout sync with the PC, dialogs, settings, history dialog |
-| `js/connection.js` | Login and daily token renewal, WebSocket stream, reconnect with backoff, `4401` close code means "sign in again"; direct or relayed route to each PC; dashboard, background, device list and history API calls |
+| `js/connection.js` | Login and daily token renewal, WebSocket stream, silence watchdog and reconnect with backoff, `4401` close code means "sign in again"; direct or relayed route to each PC (relayed ones move to direct when that works); dashboard, background, device list and history API calls |
 | `js/widgets.js` | Cards: gauges (SVG, five styles), horizontal and vertical bars (CSS), graph (canvas), value; device icons; value and unit positions, value sizes; threshold colouring; smooth motion (one shared animation loop for numbers, CSS transitions, gliding graphs); suggested layout |
 | `js/dnd.js` | Edit mode drag and drop (cards and whole sections) and corner resizing, with pointer events (mouse, pen and touch) |
 | `js/history.js` | History chart (canvas): average line, lowest-to-highest band, thresholds, crosshair tooltip |
@@ -130,7 +130,16 @@ Mixed content rules make an HTTPS page talk HTTPS to every PC, and each PC has i
 dashboard tries a PC directly (works once its CA is trusted) and otherwise goes through the home PC's relay
 (`/relay/{id}/…`, or `/relay/{address}-{port}/…` when the home PC hasn't heard from it lately), which forwards to
 that PC's HTTP port on the LAN. A plain HTTP dashboard falls back to the relay the same way when it can't reach a PC
-itself. The choice is made before the first call to a PC, the sign-in included, and again on every reconnect.
+itself. The choice is made before the first call to a PC, the sign-in included, and again on every reconnect; a PC
+on the relay is also checked directly every minute (and when the page is looked at again) and moved to a direct
+connection once that works, so it stops depending on the home PC. Settings → Devices shows which PCs are relayed.
+
+A PC that's switched off (fast startup), crashes or drops off the network doesn't close its connections, and the
+dashboard never sends anything on its WebSocket that would find out, so each connection watches its PC's stream
+instead: the dashboard's own rate is always sent (empty frames if no card uses it), and silence for
+max(5 s, 3 × interval + 1 s) counts as lost: the page shows "Can't reach …" and the connection retries with backoff
+(1 s doubling to 30 s; at once when the home PC comes back or the page is looked at again). A watchdog tick that
+comes late (the page wasn't running) restarts the count instead of dropping the connection.
 
 ## Tray app (`src/Syscom.Tray`)
 

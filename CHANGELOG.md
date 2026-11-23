@@ -8,6 +8,34 @@ Versions up to 0.16.2 were not tagged one by one: they all shipped in the first 
 version number counts the 16 feature requests and 2 fixes since the first run. 0.17.0 is the first version published
 as a GitHub release, and installed PCs update to it from there.
 
+## [0.19.1] - 2026-11-23
+
+### Fixed
+- **A PC that was switched off froze on the dashboard instead of saying it can't be reached.** A PC that shuts down
+  (Windows' fast startup turns it off without closing its connections), crashes or drops off the network doesn't say
+  goodbye, and the dashboard only listens, so the browser kept a dead connection open for many minutes and the
+  readings stayed frozen with no warning. Every PC sends readings at the dashboard's refresh rate, so the dashboard
+  now treats about 5 seconds of silence (3 missed readings at slower rates) as a lost connection: the PC's page shows
+  **Can't reach …** with the time of the last reading, its cards fade, and it reconnects by itself, with no reload,
+  as soon as the PC is back. A phone that slept or a tab the browser paused doesn't count as silence.
+- **Switching off the PC the dashboard was opened from also froze the other PCs**, without a warning, on a phone (or
+  any HTTPS dashboard) that doesn't trust their own certificates. Such a browser can only reach those PCs through the
+  PC that served the page, which passes their readings on; with that PC off there is no way to them. They now say so
+  ("This device reaches HP-NAS through LEVI-ASUS-PC, … and that one isn't answering either") with a button to set up
+  this device for that PC: trust its certificate once and the dashboard connects to it directly, so it keeps
+  updating whichever other PC is off. When the PC that served the page comes back, the others reconnect right away.
+- The relay noticed a PC that went away only when the connection finally broke, and then dropped the dashboard's
+  connection without a word. It now pings that PC every 5 seconds, gives up after 10 without an answer, and tells the
+  dashboard the PC went away.
+
+### Changed
+- A PC reached through another one moves to a direct connection by itself as soon as this browser can reach it (its
+  certificate was trusted, or it's back on this network): checked every minute and when the dashboard is looked at
+  again, so trusting a certificate takes effect without reloading. Before, the choice was only made again after a
+  disconnect.
+- Settings → Devices says **Through LEVI-ASUS-PC · Connect directly** for a PC reached through another one, and the
+  status dot's tooltip says "Connected through …", so it's clear which PCs depend on the one that served the page.
+
 ## [0.19.0] - 2026-11-15
 
 ### Added

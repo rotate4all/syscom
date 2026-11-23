@@ -1182,6 +1182,8 @@ Several rates on one connection: `{ "type": "subscribe", "streams": [ { "id": 1,
 
 The PC also tells when its on-screen display was shown or hidden (by its shortcut, the tray menu or the API): `{ "type": "osd", "rev": …, "shown": true }`, once on connect and after each change.
 
+Every stream sends a frame each interval, even with no sensors in it, so a few missed frames mean the PC is gone: a PC that's switched off or drops off the network doesn't close the socket, and a client that only listens would wait for many minutes. The dashboard reconnects after 5 seconds without a frame (or 3 intervals and a second, if longer).
+
 ```javascript
 const ws = new WebSocket("ws://192.168.1.20:47810/ws?key=YOUR_API_KEY");
 let order = [];
@@ -1297,6 +1299,8 @@ plain HTTP port on the LAN, WebSockets included.
   `api/keys`, `api/keys/…`. Never `/api/admin`.
 - `Authorization` passes through unchanged; the target PC checks it. Unknown target or path: `404`; target not
   answering: `502`.
+- A relayed WebSocket pings the target PC every 5 seconds; when it doesn't answer for 10 seconds (switched off, off
+  the network), the relay closes the dashboard's side with `1001` (going away), as it does when this PC stops.
 
 ## WebSocket stream (`/ws`)
 
